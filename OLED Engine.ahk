@@ -207,7 +207,7 @@ Default_Browser_Processes      := Browser_Processes.Clone()
 ; ==============================================================================
 ; 1. CONSTANTS & DERIVED RUNTIME VALUES
 ; ==============================================================================
-APP_VERSION           := "1.0.1"
+APP_VERSION           := "1.0.0"
 MAX_MONITORS          := 8
 ExtraDynamicMonCfg    := Map()
 
@@ -3409,16 +3409,7 @@ OpenSettingsGui(initialTab := 0) {
         logEditH := 118
         boxLog := AddSectionBox(g, lay.bx, aboutY, lay.bw, 24 + logEditH + 14, "What's New (v" APP_VERSION ")", UI_Dark_Mode)
         changelogEntries := [
-            ["Display Off After Long Idle, Per Monitor", "Now its own section in OLED Care, under Pixel Refresh. Set the minutes, then turn off all screens, one, or several. Picking only some uses the monitor's DDC/CI link and wakes them on your first key or mouse move. Hover any control for an explanation, and use Test to check it."],
-            ["Mark Pixel Refreshed Placement", "The button now sits to the right of the running active-time counter, and the due notice moved up beside the reminder checkbox."],
-            ["Presets Status Fix", "The Active right now line keeps updating and now explains why the selected preset is not active yet."],
-            ["Help / About Version Label", "Removed the duplicate version label at the top; the version at the bottom stays on every tab."],
-            ["Live Status per Monitor", "Each Monitor tab now has a Live Status box showing what OLED Engine detects right now (desktop, video, game), the idle delay that applies, and whether the monitor is active, dimmed or paused."],
-            ["Version & Changelog Sync", "App version updated to v1.0.1 with full release notes."],
-            ["Secondary Display Dim Fix", "Prevented false wake triggers so Monitor 2+ stays dimmed in both auto and manual modes."],
-            ["Eyedropper Inside Color Picker", "Added a live screen Eyedropper button right inside the Custom Color dialog with an eyedropper cursor and cursor-following hex tooltip."],
-            ["G-Sync Status Clarity", "Keeps live G-Sync status visible when automation is disabled, with a G-Sync control ON/OFF indicator underneath."],
-            ["Layout & Reset Stability", "Fixed section shifting on Reset Defaults and eliminated Help/About text overlap and GUI flicker."]
+            ["First Release", "Multi-monitor OLED burn-in protection with idle dimming, HDR/SDR switching, pixel refresh tracking, game automation and in-app updates."],
         ]
         edtChangelog := AddChangelogRichEdit(g, lay.ix, aboutY + 24, lay.iw, logEditH, changelogEntries, UI_Dark_Mode)
         aboutY += 24 + logEditH + 14 + 8

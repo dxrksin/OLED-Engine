@@ -23,7 +23,7 @@ Open **Settings > Help / About** and click **Check for Updates**. Your settings 
 Automatic G-Sync switching needs:
 
 - [NVIDIA Profile Inspector](https://github.com/Orbmu2k/nvidiaProfileInspector) (a separate download)
-- Your own G-Sync ON and OFF `.nip` profiles (Guide in App)
+- Your own G-Sync ON and OFF `.nip` profiles
 - OLED Engine running as administrator
 
 Set the paths on the Automation tab.
