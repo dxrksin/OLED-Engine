@@ -1,0 +1,8 @@
+# Personal settings and build output - never upload these
+config/
+logs/
+backups/
+updates/
+release/
+*.exe
+*.zip
