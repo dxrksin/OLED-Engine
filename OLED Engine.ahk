@@ -10,6 +10,72 @@ SetControlDelay(-1)
 #Include %A_ScriptDir%\scripts\Updater.ahk
 
 ; ##############################################################################
+; ##  @CHANGELOG  -  DEV LOG OF WHAT'S NEW / CHANGED / FIXED                   ##
+; ##  (search this file for "@CHANGELOG" to jump here)                         ##
+; ##############################################################################
+; HOW TO USE (you, or the next chat):
+;   1. Add a new entry on TOP of the list below. Newest build first.
+;   2. Entry line format:   TYPE  what changed  (where: function / section)
+;        TYPE = NEW | CHANGE | FIX | REMOVED | KNOWN-ISSUE | TODO
+;   3. Bump BUILD_ID (section 1, right under APP_VERSION) to the new build name.
+;      VERSION RULE: a NEW feature = minor bump (1.0.x -> 1.1.0). Only FIX / CHANGE entries = patch bump (1.1.0 -> 1.1.1).
+;      APP_VERSION is only changed when a release is cut; BUILD_ID changes with every working build.
+;      The startup log and the Ctrl+Alt+H diagnostics print it, so a log always
+;      says which build produced it.
+;   4. Mark every code spot you touch with a comment like  ; [hide-fix-4]
+;      Then searching the file for the build name lists every edit of that build.
+;   5. User-facing release notes (About tab) are separate: search "@WHATS_NEW_IN_APP".
+;
+; ------------------------------------------------------------------------------
+; RELEASE 1.1.0 (next)  -  APP_VERSION below still says 1.0.0 until this is released
+;   NEW   Presets section in the tray menu: switch presets quickly without opening Settings.   (separate chat, date not recorded)
+;   FIX   Secondary monitors that were dimmed / blacked out MANUALLY now wake on mouse movement.   (separate chat, date not recorded)
+;   FIX   Cursor flashing and desktop icons not hiding during / after a blackout - see BUILD hide-fix-4 below.   (2026-11-26)
+;   CHANGE Lower background disk / CPU use - see BUILD perf-1 below.   (2026-11-26)
+; ------------------------------------------------------------------------------
+; BUILD perf-1   (2026-11-26)   less background work (disk writes, display-driver queries)
+;   CHANGE Settings window no longer polls the display driver (HDR state, every 750 ms) while it is minimized or hidden.
+;         That poll also wiped the 5 s HDR cache, so the idle loop re-queried the driver too.   [perf-1] (where: SyncLiveHdrIndicators)
+;   CHANGE HDR state is re-read from Windows every 30 s (was 5 s). Display / HDR changes are still picked up at once through
+;         the display-change message and through the script's own HDR toggles.   [perf-1] (where: IsPrimaryDisplayHdrEnabled)
+;   CHANGE OLED-care stats are saved every 5 minutes (was 30 s) and on exit / reload. A crash can lose at most 5 min of stats.
+;         [perf-1] (where: TickOledCare)
+;   CHANGE Tray tooltip text is only set when it actually changes (was every second).   [perf-1] (where: UpdateTrayRefreshVisuals)
+;   TODO  Not touched on purpose: the window scan that detects playing video (GetMoviePlayingMonitors, every 0.7 s) and the
+;         desktop-icon rename check (IsDesktopHoldActive). They drive auto-dim, so they cannot be limited to Settings / tray.
+;         Measure first (frametime capture with the script closed vs running), then throttle if needed.
+; ------------------------------------------------------------------------------
+; BUILD hide-fix-4   (2026-11-26)   cursor flash + desktop icons not hiding
+;   FIX   Idle hide of the cursor and desktop icons never ran while Monitor 1 was in a MANUAL
+;         blackout: CheckIdleActivity returned early in that branch. It now runs the hide logic there
+;         too (unless automation is paused).                      (where: CheckIdleActivity)
+;   FIX   CursorHideGuard judged "is the cursor still blank?" by reading bitmap pixels. If Windows keeps
+;         the replaced cursor in another format, that test always failed and the guard re-applied the
+;         blank cursors again and again (visible flicker). Now it compares cursor handles, logs every
+;         re-apply, and after 3 tries backs off to one try per 10 s.   (where: HideSystemCursors, CursorHideGuard)
+;   FIX   The Settings colour eyedropper ended with SPI_SETCURSORS, which put the real cursors back even
+;         while they were meant to be hidden. It now re-blanks them at once, and the guard stands down
+;         while the eyedropper is active.                          (where: SetEyedropperSystemCursor)
+;   FIX   Cursor hide/show was only re-checked every 120 ms (every 1 s during competitive games), so the
+;         pointer could show on a black screen. The 40 ms wake poll now re-checks too, and a busy flag
+;         stops two timers overlapping a hide/restore.             (where: FastWakePoll, UpdateCursorVisibility)
+;   CHANGE Hidden desktop icons are re-asserted every 100 ms (was 500 ms) and immediately after the
+;         Settings window closes.                                  (where: ICON_ENFORCE_MS, CloseSettingsGui)
+;   NEW   BUILD_ID constant, printed in the startup log and in Ctrl+Alt+H; diagnostics also show how
+;         often the cursor guard had to re-apply.                  (where: section 1, ShowHideDiagnostics)
+;   NEW   This @CHANGELOG block.
+;   KNOWN-ISSUE  Not tested on a live Windows session when written. If the flash or the icons come back,
+;         turn on Debug_Log_Enabled and press Ctrl+Alt+H WHILE it is happening; send both to the next chat.
+;   KNOWN-ISSUE  scripts\App Automation.ahk and scripts\Updater.ahk were not part of this review.
+;
+; BUILD hide-fix-3   (date not recorded; reconstructed from code comments)
+;   NEW   Ctrl+Alt+H hide diagnostics.            NEW  CursorHideGuard (re-blank cursors if Windows restores them).
+;   FIX   Stale rename / context-menu "hold" no longer keeps icons visible after 30 s idle.
+;   CHANGE Typing no longer brings the hidden cursor back (only real mouse movement / clicks do).
+;   FIX   Help cursor (32651) added to the list of cursors that get blanked.
+; ------------------------------------------------------------------------------
+
+; ##############################################################################
 ; ##                                                                          ##
 ; ##                  PART 1: USER SETTINGS (EDIT HERE)                       ##
 ; ##                                                                          ##
@@ -22,7 +88,7 @@ SetControlDelay(-1)
 ; ==============================================================================
 ; [1] MONITOR 1 (PRIMARY DISPLAY) & INTERFACE
 ; ==============================================================================
-Primary_Auto_Enabled          := true        ; [true / false] Enable automatic Monitor 1 idle dim / blackout
+Primary_Auto_Enabled          := false        ; [true / false] Enable automatic Monitor 1 idle dim / blackout
 OLED_HDR_SDR_Mode_Enabled     := true        ; [true / false] true = Separate HDR & SDR profiles, false = Unified profile
 Active_HDR_Mode               := false        ; [true / false] Tracks / sets Monitor 1 HDR vs SDR display output state
 Comp_Game_Auto_SDR_Enabled    := true        ; [true / false] Switch Monitor 1 to SDR when a competitive game starts
@@ -36,7 +102,7 @@ Debug_Log_Enabled             := false        ; [true / false] Default OFF; writ
 Debug_Log_Path                := ""        ; [File path] Custom log file path (blank = logs\debug.log next to the app)
 Sound_Volume_Step             := 1        ; 0, 1, 2, 3 (4 click positions total)
 UI_Custom_Color               := ""        ; [Blank or RRGGBB hex] Custom background color for the menu / Settings UI (blank = plain Dark or Light mode)
-OLED_Refresh_Reminder_Enabled := true        ; [true / false] Optional toggle for manual OSD pixel refresh reminders
+OLED_Refresh_Reminder_Enabled := false        ; [true / false] Optional toggle for manual OSD pixel refresh reminders
 OLED_Refresh_Reminder_Days    := 8        ; [Days] Days part of reminder interval
 OLED_Refresh_Reminder_Hours   := 0        ; [Hours] Hours part of reminder interval
 OLED_Refresh_Reminder_Minutes := 0        ; [Minutes 0-59] Minutes part of reminder interval
@@ -64,7 +130,7 @@ Primary_HDR_Paused_Sec        := 5        ; [Seconds] Monitor 1 idle delay when 
 ; [2] ADDITIONAL MONITORS (PER-MONITOR DELAYS, DIM LEVELS & HDR PROFILES)
 ; ==============================================================================
 ; --- Monitor 2 ---
-Extra_Auto_Enabled            := true        ; [true / false] Enable automatic idle dim / blackout on Monitor 2
+Extra_Auto_Enabled            := false        ; [true / false] Enable automatic idle dim / blackout on Monitor 2
 Extra_HDR_SDR_Mode_Enabled    := false        ; [true / false] true = Separate HDR & SDR profiles (when HDR supported), false = Unified
 Extra_Comp_Game_Auto_SDR      := false        ; [true / false] Switch Monitor 2 to SDR when a competitive game starts
 Extra_Dim_Percent             := 73        ; [Percent 0-100] Monitor 2 SDR / Unified dim level (100 = pure #000000 blackout)
@@ -81,7 +147,7 @@ Extra_HDR_Paused_Sec          := 10        ; [Seconds] Monitor 2 HDR idle delay 
 Extra_Game_Carryover_Enabled  := true        ; [true / false] true = Monitors 2-5 use their Game delays while a game runs on ANOTHER monitor (their Live Status says so); false = every monitor only uses its own window
 
 ; --- Monitor 3 ---
-Mon3_Auto_Enabled             := true        
+Mon3_Auto_Enabled             := false        
 Mon3_HDR_SDR_Mode_Enabled     := false        
 Mon3_Comp_Game_Auto_SDR       := false        
 Mon3_Dim_Percent              := 73        
@@ -97,7 +163,7 @@ Mon3_HDR_Comp_Sec             := 5
 Mon3_HDR_Paused_Sec           := 10        
 
 ; --- Monitor 4 ---
-Mon4_Auto_Enabled             := true        
+Mon4_Auto_Enabled             := false        
 Mon4_HDR_SDR_Mode_Enabled     := false        
 Mon4_Comp_Game_Auto_SDR       := false        
 Mon4_Dim_Percent              := 73        
@@ -113,7 +179,7 @@ Mon4_HDR_Comp_Sec             := 5
 Mon4_HDR_Paused_Sec           := 10        
 
 ; --- Monitor 5 ---
-Mon5_Auto_Enabled             := true        
+Mon5_Auto_Enabled             := false        
 Mon5_HDR_SDR_Mode_Enabled     := false        
 Mon5_Comp_Game_Auto_SDR       := false        
 Mon5_Dim_Percent              := 73        
@@ -131,11 +197,11 @@ Mon5_HDR_Paused_Sec           := 10
 ; ==============================================================================
 ; [3] DESKTOP ICONS, CURSOR & STARTUP
 ; ==============================================================================
-Desktop_Hide_Enabled          := true        ; [true / false] Hide cursor & fade desktop icons on idle
+Desktop_Hide_Enabled          := false        ; [true / false] Hide cursor & fade desktop icons on idle
 Desktop_Idle_Sec              := 5        ; [Seconds] Idle delay before hiding cursor & fading desktop icons
 Icon_Fade_Ms                  := 350        ; [Milliseconds] Smooth fade speed for desktop icons (0 = instant)
-Start_With_Windows            := true        ; [true / false] Launch automatically when signing in to Windows
-Start_Minimized               := true        ; [true / false] Start silently in the system tray without opening Settings
+Start_With_Windows            := false        ; [true / false] Launch automatically when signing in to Windows
+Start_Minimized               := false        ; [true / false] Start silently in the system tray without opening Settings
 
 ; ==============================================================================
 ; [4] COMPETITIVE GAMES & NEVER-DIM EXCLUSIONS LIST
@@ -144,9 +210,9 @@ Comp_Games_List               := "RainbowSix.exe"        ; [Comma-separated .exe
 Excluded_Processes_List       := ""        ; [Comma-separated .exe names] Pause auto-dim/blackout while any listed process is running
 
 ; ==============================================================================
-; [5] TRAY MENU ORDER & VISIBILITY (Settings & Exit are fixed; IDs: pause, auto_dim, hdr_toggle, hdr_sdr, refresh, blackout, sec_dim, desk_hide, edit, reload)
+; [5] TRAY MENU ORDER & VISIBILITY (Settings & Exit are fixed; IDs: pause, auto_dim, hdr_toggle, hdr_sdr, refresh, blackout, sec_dim, desk_hide, presets, edit, reload)
 ; ==============================================================================
-Tray_Menu_Config              := "pause:1,auto_dim:1,hdr_toggle:1,hdr_sdr:0,refresh:1,blackout:1,sec_dim:1,desk_hide:1,edit:0,reload:1"        ; [Ordered comma-separated item:enabled(1/0)]
+Tray_Menu_Config              := "pause:1,auto_dim:1,hdr_toggle:1,hdr_sdr:0,refresh:1,blackout:1,sec_dim:1,desk_hide:1,presets:1,edit:0,reload:1"        ; [Ordered comma-separated item:enabled(1/0)]
 
 ; ==============================================================================
 ; [6] PER-MONITOR HOTKEYS (BLANK = DISABLED; RESPECTS EACH MONITOR'S DIM LEVEL)
@@ -172,6 +238,7 @@ Presets                       := []
 presetActiveIdx               := 0
 presetCacheTick               := 0
 presetPinned                  := ""        ; preset switched on by hand from the Presets tab (session only)
+TrayPresetsMenu               := Menu()    ; Presets submenu of the tray menu
 presetFgExe                   := ""        ; last known focused program, used by focus-only presets
 originalTaskbarAutoHide       := ""
 taskbarChangedByScript        := false
@@ -207,7 +274,8 @@ Default_Browser_Processes      := Browser_Processes.Clone()
 ; ==============================================================================
 ; 1. CONSTANTS & DERIVED RUNTIME VALUES
 ; ==============================================================================
-APP_VERSION           := "1.0.0"
+APP_VERSION           := "1.1.0"
+BUILD_ID              := "perf-1"   ; dev build name, keep in step with the newest @CHANGELOG entry
 MAX_MONITORS          := 8
 ExtraDynamicMonCfg    := Map()
 
@@ -297,7 +365,7 @@ MANUAL_WAKE_MOVE_PX   := 8       ; Cursor travel (px) from the toggle anchor tha
 PRIMARY_POSTDIM_MS    := 150     ; Settle window after Monitor 1 auto-dims before it may wake again
 PRIMARY_REDIM_MS      := 1500    ; Minimum time after a wake before Monitor 1 may auto-dim again (stops dim/wake bouncing)
 DISPLAY_SETTLE_MS     := 1500    ; Settle window after a display / HDR topology change
-ICON_ENFORCE_MS       := 500     ; How often hidden desktop icons get their layered alpha re-applied
+ICON_ENFORCE_MS       := 100     ; How often hidden desktop icons get re-asserted if Explorer shows them again [hide-fix-4: was 500]
 
                                  ; Wake hooks (must exist before anything calls SyncWakeHooks during startup)
 wakeHookInitX         := 0
@@ -352,6 +420,9 @@ RefreshPromptGui                   := ""
 
 isCursorIdleHidden                 := false
 areCursorsHidden                   := false
+blankCursorHandles                 := Map()          ; [hide-fix-4] cursor id -> handle Windows reported right after we blanked it (CursorHideGuard compares against it)
+eyedropperCursorActive             := false          ; [hide-fix-4] true while the Settings colour eyedropper owns the system cursors
+cursorGuardReapplyCount            := 0              ; [hide-fix-4] how many times CursorHideGuard had to re-blank the cursors (shown in Ctrl+Alt+H)
 
 areDesktopIconsHidden              := false
 currentIconAlpha                   := 255
@@ -375,6 +446,9 @@ primaryAutoDimTick                 := 0
 lastDisplayChangeTick              := 0
 lastPrimaryRealInputTick           := 0
 lastCursorInputTick                := A_TickCount
+lastCursorMoveTick                 := A_TickCount    ; last REAL mouse move / click (drives the cursor-hide timer; typing and background input do not count)
+cursorAnchorX                      := -99999
+cursorAnchorY                      := -99999
 lastIconEnforceTick                := 0
 primaryFadeTimerFn                 := StepPrimaryOverlayFade
 iconFadeTimerFn                    := StepDesktopIconFade
@@ -478,6 +552,7 @@ OnMessage(0x0133, OnCtlColor)           ; WM_CTLCOLOREDIT
 OnMessage(0x0134, OnCtlColor)           ; WM_CTLCOLORLISTBOX
 OnMessage(0x0135, OnCtlColor)           ; WM_CTLCOLORBTN
 OnMessage(0x0200, OnMouseMoveMsg)       ; WM_MOUSEMOVE
+OnMessage(0x0404, OnTrayIconMsg)        ; tray icon clicks (refreshes the Presets submenu right before the menu opens)
 OnMessage(0x0202, OnLeftButtonUp)       ; WM_LBUTTONUP
 OnMessage(0x002B, OnTabDrawItem)        ; WM_DRAWITEM (rounded pill tabs)
 PresetsIniPath := ScriptBasePath ".presets.ini"
@@ -499,7 +574,7 @@ SetTimer(CheckLongIdle, 5000)
 OnExit(CleanupOnExit)
 
 InitUpdater()
-DebugLogEvent("================ OLED Engine started ================")
+DebugLogEvent("================ OLED Engine started (build " BUILD_ID ") ================")
 DebugLogEvent("Monitors detected: " GetDetectedMonitorCount() " | Monitor 1 is in " (QueryWindowsPrimaryHdrState() ? "HDR" : "SDR") " mode | Auto-dim Monitor 1: " OnOff(Primary_Auto_Enabled) ", other monitors: " OnOff(Extra_Auto_Enabled))
 
 ApplyMenuTheme(UI_Dark_Mode)
@@ -975,13 +1050,19 @@ UpdateTrayRefreshVisuals(force := false) {
     }
 
     if isAutomationPaused {
-        A_IconTip := "OLED Engine — AUTOMATION PAUSED"
+        newTip := "OLED Engine — AUTOMATION PAUSED"
     } else if (st.state = 2) {
-        A_IconTip := "OLED Engine — PIXEL REFRESH DUE (Overdue by " FormatDuration(st.overdueMs, false) ")"
+        newTip := "OLED Engine — PIXEL REFRESH DUE (Overdue by " FormatDuration(st.overdueMs, false) ")"
     } else if (st.state = 1) {
-        A_IconTip := "OLED Engine — Pixel refresh due soon (" FormatDuration(st.remainingMs, false) " left)"
+        newTip := "OLED Engine — Pixel refresh due soon (" FormatDuration(st.remainingMs, false) " left)"
     } else {
-        A_IconTip := "OLED Engine"
+        newTip := "OLED Engine"
+    }
+    ; [perf-1] only touch the tray icon when the text really changed
+    static lastTip := ""
+    if (newTip != lastTip) {
+        lastTip := newTip
+        A_IconTip := newTip
     }
 }
 
@@ -1445,6 +1526,12 @@ SyncLiveHdrIndicators(*) {
     global HdrSwitchMap, SettingsGui, Active_HDR_Mode, cachedHdrState, lastHdrCheckTick
     if !IsObject(SettingsGui) || HdrSwitchMap.Count = 0 {
         return
+    }
+    ; [perf-1] Minimized or hidden Settings: nothing is visible, so do not query the display driver
+    try {
+        if (WinGetMinMax("ahk_id " SettingsGui.Hwnd) = -1 || !DllCall("IsWindowVisible", "Ptr", SettingsGui.Hwnd, "Int")) {
+            return
+        }
     }
     InvalidateDisplayTopoCache()
     priIdx := MonitorGetPrimary()
@@ -2379,7 +2466,8 @@ SetSettingsLayout(tabW) {
 
 ; Controls that another script file (App Automation.ahk) adds to this window were laid out for the
 ; old 496 px section boxes. Stretch / move them with the same rules so that tab fills the window too.
-; Read-only rich text box for the changelog: each "• Title:" is bold and accent-colored, the rest is normal text.
+; Read-only rich text box for the changelog: a centered version number, then one heading per section
+; with its items as bullets underneath. An entry ["Version", "x.y.z"] starts a new version block.
 AddChangelogRichEdit(g, x, y, w, h, entries, dark) {
     global ThemeSurfaceRgb
     static hLib := DllCall("LoadLibrary", "Str", "Msftedit.dll", "Ptr")
@@ -2387,35 +2475,89 @@ AddChangelogRichEdit(g, x, y, w, h, entries, dark) {
     hwnd := re.Hwnd
     try DllCall("uxtheme\SetWindowTheme", "Ptr", hwnd, "Str", dark ? "DarkMode_Explorer" : "Explorer", "Ptr", 0)
 
+    ; Group the entries by version, then by section (in the order each section first appears)
+    blocks := []
+    for e in entries {
+        if (e[1] = "Version") {
+            blocks.Push({ver: e[2], names: [], items: Map()})
+            continue
+        }
+        if !blocks.Length {
+            blocks.Push({ver: "", names: [], items: Map()})
+        }
+        cur := blocks[blocks.Length]
+        if !cur.items.Has(e[1]) {
+            cur.names.Push(e[1])
+            cur.items[e[1]] := []
+        }
+        cur.items[e[1]].Push(e[2])
+    }
+
+    rows := []
+    for blk in blocks {
+        if (A_Index > 1) {
+            rows.Push(["gap", ""])
+        }
+        if (blk.ver != "") {
+            rows.Push(["ver", "Version " blk.ver])
+        }
+        for secName in blk.names {
+            if (A_Index > 1) {
+                rows.Push(["gap", ""])
+            }
+            rows.Push(["head", secName])
+            for item in blk.items[secName] {
+                rows.Push(["item", "• " item])
+            }
+        }
+    }
+
     ; Rich edit counts a line break as ONE character, so separate lines with `r only
     text := ""
     ranges := []
-    for e in entries {
-        head := "• " e[1] ":"
-        ranges.Push([StrLen(text), StrLen(text) + StrLen(head)])
-        text .= head " " e[2] ((A_Index < entries.Length) ? "`r" : "")
+    for row in rows {
+        ranges.Push([StrLen(text), StrLen(text) + StrLen(row[2]), row[1]])
+        text .= row[2] ((A_Index < rows.Length) ? "`r" : "")
     }
     DllCall("SendMessageW", "Ptr", hwnd, "UInt", 0x0C, "Ptr", 0, "Str", text)            ; WM_SETTEXT
     DllCall("SendMessageW", "Ptr", hwnd, "UInt", 0x443, "Ptr", 0, "Int", RgbToBgr(ThemeSurfaceRgb))  ; EM_SETBKGNDCOLOR
 
-    SetFmt(start, end, mask, effects, rgb) {
+    SetFmt(start, end, effects, rgb, twips := 190) {
         cf := Buffer(92, 0)
         NumPut("UInt", 92, cf, 0)
-        NumPut("UInt", mask, cf, 4)
+        NumPut("UInt", 0xE0000001, cf, 4)                  ; CFM_SIZE|CFM_FACE|CFM_COLOR|CFM_BOLD
         NumPut("UInt", effects, cf, 8)
-        NumPut("Int", 190, cf, 12)                         ; 9.5 pt in twips
+        NumPut("Int", twips, cf, 12)                       ; 190 twips = 9.5 pt
         NumPut("UInt", RgbToBgr(rgb), cf, 20)
         StrPut("Segoe UI", cf.Ptr + 26, 32, "UTF-16")
-        cr := Buffer(8, 0)
-        NumPut("Int", start, cr, 0)
-        NumPut("Int", end, cr, 4)
         DllCall("SendMessageW", "Ptr", hwnd, "UInt", 0x0B1, "Ptr", start, "Ptr", end)  ; EM_SETSEL
         DllCall("SendMessageW", "Ptr", hwnd, "UInt", 0x444, "Ptr", 1, "Ptr", cf.Ptr)   ; EM_SETCHARFORMAT (selection)
     }
-    ; CFM_SIZE|CFM_FACE|CFM_COLOR|CFM_BOLD  = 0x80000000|0x20000000|0x40000000|1
-    SetFmt(0, -1, 0xE0000001, 0, dark ? 0xFFFFFF : 0x000000)
+    ; Paragraph layout of the selected line (align: 1 = left, 3 = center; indents in twips)
+    SetPara(align, indent, hang) {
+        pf := Buffer(188, 0)
+        NumPut("UInt", 188, pf, 0)
+        NumPut("UInt", 0x0D, pf, 4)                        ; PFM_STARTINDENT|PFM_OFFSET|PFM_ALIGNMENT
+        NumPut("Int", indent, pf, 12)
+        NumPut("Int", hang, pf, 20)
+        NumPut("UShort", align, pf, 24)
+        DllCall("SendMessageW", "Ptr", hwnd, "UInt", 0x447, "Ptr", 0, "Ptr", pf.Ptr)   ; EM_SETPARAFORMAT
+    }
+
+    plain := dark ? 0xFFFFFF : 0x000000
+    accent := dark ? 0x6EE7B7 : 0x1D4ED8
+    SetFmt(0, -1, 0, plain)
     for r in ranges {
-        SetFmt(r[1], r[2], 0xE0000001, 1, dark ? 0x6EE7B7 : 0x1D4ED8)   ; CFE_BOLD
+        if (r[3] = "ver") {
+            SetFmt(r[1], r[2], 1, plain, 230)              ; bold, larger
+            SetPara(3, 0, 0)
+        } else if (r[3] = "head") {
+            SetFmt(r[1], r[2], 1, accent, 200)
+            SetPara(1, 0, 0)
+        } else if (r[3] = "item") {
+            SetFmt(r[1], r[2], 0, plain)
+            SetPara(1, 160, 150)                           ; wrapped lines line up under the text
+        }
     }
     DllCall("SendMessageW", "Ptr", hwnd, "UInt", 0x0B1, "Ptr", 0, "Ptr", 0)   ; caret to top
     DllCall("SendMessageW", "Ptr", hwnd, "UInt", 0x0B7, "Ptr", 0, "Ptr", 0)   ; EM_SCROLLCARET
@@ -3406,10 +3548,18 @@ OpenSettingsGui(initialTab := 0) {
         boxAbout.Move(, , , aboutBoxH)
         aboutY += aboutBoxH + 8
 
-        logEditH := 118
+        logEditH := 220
         boxLog := AddSectionBox(g, lay.bx, aboutY, lay.bw, 24 + logEditH + 14, "What's New (v" APP_VERSION ")", UI_Dark_Mode)
+        ; @WHATS_NEW_IN_APP  user-facing release notes shown on the About tab (the developer log is @CHANGELOG at the top of the file)
         changelogEntries := [
-            ["First Release", "Multi-monitor OLED burn-in protection with idle dimming, HDR/SDR switching, pixel refresh tracking, game automation and in-app updates."],
+            ["Version", "1.1.0"],
+            ["New", "Presets in the tray menu let you switch without opening Settings."],
+            ["New", "Press Ctrl+Alt+H for a diagnostic report on dimming, automation, presets, games, video, cursor and desktop icons, copied to your clipboard."],
+            ["Fixes", "Manually dimmed or blacked-out monitors now wake on mouse movement."],
+            ["Fixes", "Resolved cursor flashing and desktop icons not hiding during blackouts."],
+            ["Performance", "Reduced background disk and CPU use."],
+            ["Version", "1.0.0"],
+            ["First Release", "Multi-monitor OLED burn-in protection with idle dimming, HDR/SDR switching, pixel refresh tracking, game automation and in-app updates."]
         ]
         edtChangelog := AddChangelogRichEdit(g, lay.ix, aboutY + 24, lay.iw, logEditH, changelogEntries, UI_Dark_Mode)
         aboutY += 24 + logEditH + 14 + 8
@@ -4581,11 +4731,13 @@ CreateEyedropperCursor() {
 }
 
 SetEyedropperSystemCursor(enable) {
+    global eyedropperCursorActive, areCursorsHidden
     static active := false
     if (enable = active) {
         return
     }
     active := enable
+    eyedropperCursorActive := enable    ; [hide-fix-4] lets CursorHideGuard stand down while the eyedropper cursors are on screen
     if enable {
         cursorIds := [32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32650]
         for id in cursorIds {
@@ -4596,6 +4748,10 @@ SetEyedropperSystemCursor(enable) {
         }
     } else {
         DllCall("SystemParametersInfo", "UInt", 0x0057, "UInt", 0, "Ptr", 0, "UInt", 0)
+        ; [hide-fix-4] SPI_SETCURSORS put the REAL cursors back. If they are supposed to be hidden (blackout / idle hide), blank them again now
+        if areCursorsHidden {
+            HideSystemCursors(true)
+        }
     }
 }
 
@@ -4775,7 +4931,7 @@ SyncSettingsLiveRefreshTimer(*) {
 CloseSettingsGui(*) {
     global SettingsGui, SettingsTabsCtrl, SettingsTabDefaultBanner, SettingsTabTipMap, GroupTitleTips, HdrSwitchMap, CareUiRefs
     global SettingsApplyBtn, SettingsHintCtrl, SettingsLastBannerText, isDraggingTrayRow, dragTraySourceRow, lastHoveredKey
-    global LiveStatusRefs
+    global LiveStatusRefs, lastIconEnforceTick
     SetTimer(SyncLiveStatusBoxes, 0)
     SetTimer(SyncLiveHdrIndicators, 0)
     SetTimer(SyncSettingsLiveRefreshTimer, 0)
@@ -4801,6 +4957,13 @@ CloseSettingsGui(*) {
         try SettingsGui.Destroy()
     }
     SettingsGui := ""
+    ; [hide-fix-4] Closing the window hands focus back to the desktop. Re-assert the hidden cursor / desktop icons right away
+    ; instead of waiting for the next timer tick.
+    try {
+        UpdateCursorVisibility()
+        lastIconEnforceTick := 0
+        EnforceDesktopIconAlpha()
+    }
 }
 
 CommitSettingsFromGui(
@@ -5341,6 +5504,7 @@ GetDefaultTrayItems() {
         { id: "blackout",   enabled: true },
         { id: "sec_dim",    enabled: true },
         { id: "desk_hide",  enabled: true },
+        { id: "presets",    enabled: true },
         { id: "edit",       enabled: false },
         { id: "reload",     enabled: false }
     ]
@@ -5424,6 +5588,8 @@ GetTrayItemMenuLabel(id) {
             return (hkDisp != "") ? ("Dim / Blackout Monitors 2+ (" hkDisp ")") : "Dim / Blackout Monitors 2+"
         case "desk_hide":
             return "Hide Cursor && Desktop Icons"
+        case "presets":
+            return "Presets"
         case "edit":
             return "Edit Script"
         case "reload":
@@ -5744,7 +5910,7 @@ SetWindowsPrimaryHdrState(enableHdr) {
 
 IsPrimaryDisplayHdrEnabled() {
     global cachedHdrState, lastHdrCheckTick
-    if (A_TickCount - lastHdrCheckTick < 5000) {
+    if (A_TickCount - lastHdrCheckTick < 30000) {    ; [perf-1] was 5000; display changes refresh it sooner (HandleDisplayOrPowerChange)
         return cachedHdrState
     }
     lastHdrCheckTick := A_TickCount
@@ -7143,7 +7309,7 @@ TickOledCare() {
     }
 
     saveTickCounter += 1
-    if (saveTickCounter >= 30) {
+    if (saveTickCounter >= 300) {    ; [perf-1] every 5 min (was 30 s); CleanupOnExit also saves
         saveTickCounter := 0
         SaveOledCareState()
     }
@@ -7241,6 +7407,9 @@ SetupTrayMenu() {
                 } else {
                     tray.Uncheck(label)
                 }
+            case "presets":
+                RefreshTrayPresetsMenu()
+                tray.Add(label, TrayPresetsMenu)
             case "edit":
                 tray.Add(label, (*) => EditScript())
             case "reload":
@@ -7267,6 +7436,74 @@ SetupTrayMenu() {
     tray.Add()
     tray.Add("Exit", (*) => ExitApp())
     tray.Default := "Settings"
+}
+
+; ==============================================================================
+; TRAY "PRESETS" SUBMENU - hover to see every saved preset, click one to switch to it (the active one is ticked)
+; ==============================================================================
+OnTrayIconMsg(wParam, lParam, msg, hwnd) {
+    ; Right click (0x205) / context menu (0x7B): refresh the ticks and names just before the menu opens. Return nothing so the normal menu still shows.
+    if (lParam = 0x205 || lParam = 0x7B) {
+        try RefreshTrayPresetsMenu()
+    }
+}
+
+RefreshTrayPresetsMenu() {
+    global TrayPresetsMenu, Presets, presetPinned
+    TrayPresetsMenu.Delete()
+
+    if (!IsObject(Presets) || Presets.Length = 0) {
+        TrayPresetsMenu.Add("No presets yet (create them in Settings)", (*) => OpenSettingsGui())
+        TrayPresetsMenu.Disable("No presets yet (create them in Settings)")
+        return
+    }
+
+    activeIdx := 0
+    try activeIdx := GetActivePresetIdx(true)
+
+    autoLbl := "Automatic (follow running apps)"
+    TrayPresetsMenu.Add(autoLbl, TrayPresetAutomatic)
+    if !IsObject(presetPinned) {
+        TrayPresetsMenu.Check(autoLbl)
+    }
+    TrayPresetsMenu.Add()
+
+    for i, p in Presets {
+        lbl := StrReplace(p.name, "&", "&&")
+        if (lbl = "") {
+            lbl := "Preset " i
+        }
+        TrayPresetsMenu.Add(lbl, TrayPresetPick.Bind(p))
+        if (i = activeIdx) {
+            TrayPresetsMenu.Check(lbl)
+        }
+        if !p.enabled {
+            TrayPresetsMenu.Disable(lbl)
+        }
+    }
+}
+
+TrayPresetPick(p, *) {
+    global presetPinned
+    if (!IsObject(p) || !p.enabled) {
+        return
+    }
+    ; Same as the Pin button in Settings: picking a preset switches to it, picking the active manual one releases it
+    presetPinned := PresetIsPinned(p) ? "" : p
+    InvalidatePresetCache()
+    GetActivePresetIdx(true)
+    DebugLogEvent("Preset " (IsObject(presetPinned) ? "switched on from the tray: " p.name : "released from the tray: " p.name))
+    ResetAllIdleTimers()
+    SetupTrayMenu()
+}
+
+TrayPresetAutomatic(*) {
+    global presetPinned
+    presetPinned := ""
+    InvalidatePresetCache()
+    GetActivePresetIdx(true)
+    DebugLogEvent("Presets set back to automatic from the tray")
+    SetupTrayMenu()
 }
 
 ToggleAutomationPause(*) {
@@ -7541,6 +7778,7 @@ SetWakePoll(enable) {
 ; Hook-free wake detection. Runs only while something is dimmed or hidden.
 FastWakePoll(resetBaseline := false) {
     global isSessionLocked, areDesktopIconsHidden, lastDesktopIconActiveTick, wakeHookInitX, wakeHookInitY, MANUAL_WAKE_MOVE_PX
+    global isManualExtraDimOn, manualExtraMonSet
     static prevIdle := 0, prevL := false, prevR := false, prevX := -99999, prevY := -99999
     static rcL := 0, rcT := 0, rcR := 0, rcB := 0, rectTick := 0
 
@@ -7568,6 +7806,11 @@ FastWakePoll(resetBaseline := false) {
     curX := NumGet(pt, 0, "Int")
     curY := NumGet(pt, 4, "Int")
     now := A_TickCount
+
+    ; [hide-fix-4] Keep the pointer hidden / shown in step with where it is every 40 ms (the idle loop only runs every 120 ms,
+    ; every 1 s during competitive games), and put hidden desktop icons back to hidden quickly if Explorer showed them again.
+    UpdateCursorVisibility()
+    EnforceDesktopIconAlpha(now)
 
     ; Monitor 1 rectangle, refreshed every 2 seconds
     if (now - rectTick > 2000) {
@@ -7611,9 +7854,12 @@ FastWakePoll(resetBaseline := false) {
         wakeHookInitX := curX
         wakeHookInitY := curY
         if !onPrimary {
-            ; Cursor is on a secondary monitor: only treat an actual click as an instant wake trigger
+            ; Secondary monitor: a click always wakes. Plain mouse movement also wakes a MANUALLY dimmed / blacked-out monitor
+            ; (the grace window and the move threshold keep jitter from doing it).
             if (lPress || rPress) {
                 TriggerInstantWake(curX, curY, true, false)
+            } else if (isManualExtraDimOn || manualExtraMonSet.Count > 0) {
+                TriggerInstantWake(curX, curY, false, false)
             }
         } else {
             TriggerInstantWake(curX, curY, false, false)
@@ -7629,6 +7875,7 @@ TriggerInstantWake(evX := -99999, evY := -99999, isInput := false, isKeyboard :=
     global isManualExtraDimOn, isAutoExtraDimmed, manualExtraMonSet, extraMonDimmedSet
     global manualPrimaryStartTick, manualExtraStartTick, manualExtraMonStartTick, MANUAL_WAKE_GRACE_MS
     global lastPrimaryActiveTick, lastExtraActiveTick, lastCursorInputTick, lastDesktopIconActiveTick
+    global lastCursorMoveTick, cursorAnchorX, cursorAnchorY
     global lastPrimaryRealInputTick, extraMonLastActiveTick, lastMouseX, lastMouseY, wasOnExtraMonitor
     global isCursorIdleHidden, areDesktopIconsHidden
 
@@ -7658,8 +7905,14 @@ TriggerInstantWake(evX := -99999, evY := -99999, isInput := false, isKeyboard :=
     wasOnExtraMonitor    := onExtraNow
     lastCursorInputTick  := now
 
-    if isCursorIdleHidden {
-        SetCursorIdleHidden(false)
+    ; Only the mouse brings the cursor back. Typing leaves it hidden (no more popping in and out while you type).
+    if !isKeyboard {
+        lastCursorMoveTick := now
+        cursorAnchorX := curX
+        cursorAnchorY := curY
+        if isCursorIdleHidden {
+            SetCursorIdleHidden(false)
+        }
     }
 
    if onExtraNow {
@@ -7728,6 +7981,28 @@ IsWindowHung(hwnd) {
     return !!DllCall("IsHungAppWindow", "Ptr", hwnd, "Int")
 }
 
+; True while a rename / context menu is holding the icons visible. If that "hold" has lasted over 30 s and the
+; user is not touching anything, it is a leftover Explorer popup window, not a real menu, so it stops blocking the hide.
+IsDesktopHoldActive(now) {
+    static holdSince := 0, loggedStale := false
+    if !(IsEditingFileName() || IsContextMenuOpen()) {
+        holdSince := 0
+        loggedStale := false
+        return false
+    }
+    if (holdSince = 0) {
+        holdSince := now
+    }
+    if ((now - holdSince) > 30000 && A_TimeIdle > 5000) {
+        if !loggedStale {
+            loggedStale := true
+            DebugLogEvent("Desktop hide: ignoring a rename / context-menu hold that has lasted over 30 s (stale Explorer popup)")
+        }
+        return false
+    }
+    return true
+}
+
 IsEditingFileName() {
     if (lvHwnd := GetDesktopListViewHwnd()) {
         try {
@@ -7747,7 +8022,8 @@ IsEditingFileName() {
     }
     fgClass := ""
     try fgClass := WinGetClass("ahk_id " fgHwnd)
-    if (fgClass != "Progman" && fgClass != "WorkerW" && fgClass != "CabinetWClass" && fgClass != "ExploreWClass") {
+    ; Only the desktop itself matters here. A File Explorer window with its search box focused must not keep the desktop icons / cursor awake.
+    if (fgClass != "Progman" && fgClass != "WorkerW") {
         return false
     }
     try {
@@ -7822,6 +8098,62 @@ IsDesktopClick(lBtnDown, prevLButtonDown, rBtnDown, prevRButtonDown, curX, curY)
     return IsPointInDesktopShell(curX, curY)
 }
 
+; Hides / restores the cursor and the desktop icons on idle. Runs on every idle tick, including while a "never dim" preset is active.
+RunDesktopHideLogic(now) {
+    global Desktop_Hide_Enabled, isManualPrimaryDimOn, isCursorIdleHidden, areDesktopIconsHidden
+    global lastCursorMoveTick, lastDesktopIconActiveTick
+
+    deskIdleSec := GetDesktopIdleSec()
+    if (!Desktop_Hide_Enabled || isManualPrimaryDimOn || deskIdleSec <= 0) {
+        if isCursorIdleHidden {
+            SetCursorIdleHidden(false)
+        }
+        if areDesktopIconsHidden {
+            SetDesktopIconsTarget(true)
+        }
+        return
+    }
+
+    desktopIdleLimitMs := deskIdleSec * 1000
+    cursorIdleElapsed := now - lastCursorMoveTick
+    iconIdleElapsed   := now - lastDesktopIconActiveTick
+
+    if (cursorIdleElapsed >= desktopIdleLimitMs) {
+        if !isCursorIdleHidden {
+            SetCursorIdleHidden(true)
+        }
+    } else if isCursorIdleHidden {
+        SetCursorIdleHidden(false)
+    }
+
+    if IsDesktopHoldActive(now) {
+        lastDesktopIconActiveTick := now
+        lastCursorMoveTick := now
+        if areDesktopIconsHidden {
+            SetDesktopIconsTarget(true)
+        }
+    } else if (iconIdleElapsed >= desktopIdleLimitMs) {
+        if !areDesktopIconsHidden {
+            SetDesktopIconsTarget(false)
+        }
+    }
+}
+
+; Like ResetAllIdleTimers, but leaves the cursor / desktop-icon hide timers alone
+ResetDimIdleTimers(now := 0) {
+    global lastPrimaryActiveTick, lastExtraActiveTick, prevTimeIdle, extraMonLastActiveTick, lastCursorInputTick
+    if (now = 0) {
+        now := A_TickCount
+    }
+    lastPrimaryActiveTick := now
+    lastCursorInputTick   := now
+    lastExtraActiveTick   := now
+    prevTimeIdle          := A_TimeIdle
+    Loop GetDetectedMonitorCount() {
+        extraMonLastActiveTick[A_Index] := now
+    }
+}
+
 CheckIdleActivity() {
     global isAutomationPaused, isSessionLocked, isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed
     global isCursorIdleHidden, areDesktopIconsHidden, isAutoExtraDimmed, isManualExtraDimOn, manualExtraMonSet
@@ -7844,10 +8176,28 @@ CheckIdleActivity() {
     global Primary_Auto_Enabled, Comp_Game_Auto_SDR_Enabled, Extra_Auto_Enabled, Extra_Comp_Game_Auto_SDR, Desktop_Hide_Enabled, Desktop_Idle_Sec
     global wasCompGameRunning, switchedToSdrForCompGame, lastDebugStateSig
     global lastCursorInputTick, lastPrimaryRealInputTick, primaryAutoDimTick, lastDisplayChangeTick
+    global lastCursorMoveTick, cursorAnchorX, cursorAnchorY
     global PRIMARY_POSTDIM_MS, DISPLAY_SETTLE_MS, PRIMARY_REDIM_MS, primaryLastWakeTick
 
     if isSessionLocked {
-        return
+        ; If the unlock message was missed, the whole idle loop would stay off forever. The input desktop is only reachable when really unlocked.
+        static unlockedChecks := 0
+        hDesk := DllCall("OpenInputDesktop", "UInt", 0, "Int", 0, "UInt", 0x100, "Ptr")
+        if hDesk {
+            DllCall("CloseDesktop", "Ptr", hDesk)
+            unlockedChecks += 1
+        } else {
+            unlockedChecks := 0
+        }
+        if (unlockedChecks >= 4 && A_TimeIdle < 1500) {
+            unlockedChecks := 0
+            isSessionLocked := false
+            ResetAllIdleTimers()
+            RestoreSystemCursors()
+            DebugLogEvent("Session looked unlocked while still marked locked - recovered (missed unlock message)")
+        } else {
+            return
+        }
     }
 
     now := A_TickCount
@@ -7918,6 +8268,19 @@ CheckIdleActivity() {
     spuriousMove    := mouseMoved && !inputHappened && displaySettling
     activity        := inputHappened || (mouseMoved && !spuriousMove)
 
+    ; Cursor-hide timer: only a real mouse move (more than 2 px from where it last counted) or a click keeps the cursor on screen.
+    ; Typing, controllers, sensor jitter and background programs that poke the idle timer no longer bring it back.
+    if (hasCursorPos && (Abs(curX - cursorAnchorX) > 2 || Abs(curY - cursorAnchorY) > 2)) {
+        cursorAnchorX := curX
+        cursorAnchorY := curY
+        if !spuriousMove {
+            lastCursorMoveTick := now
+        }
+    }
+    if mouseClicked {
+        lastCursorMoveTick := now
+    }
+
     if isManualBlackoutOn {
         ; Activity on Monitors 2-5 is tracked per monitor and never wakes the Monitor 1 blackout
         if (activity && onExtraNow) {
@@ -7934,6 +8297,11 @@ CheckIdleActivity() {
             lastMouseY := curY
         }
         wasOnExtraMonitor := onExtraNow
+        ; [hide-fix-4] This branch used to return before the idle hide ran, so the desktop icons (and the idle cursor hide)
+        ; were never handled during a manual blackout. Run it here too, unless automation is paused.
+        if !isAutomationPaused {
+            RunDesktopHideLogic(now)
+        }
         UpdateCursorVisibility()
         return
     }
@@ -7980,7 +8348,13 @@ CheckIdleActivity() {
     }
 
     if IsExcludedProcessRunning() {
-        ResetAllIdleTimers(now)
+        ; A "never dim" preset keeps the SCREENS from dimming. Hiding the cursor / desktop icons on idle keeps running.
+        if PresetNeverDimActive() {
+            ResetDimIdleTimers(now)
+            RunDesktopHideLogic(now)
+        } else {
+            ResetAllIdleTimers(now)
+        }
         if isAutoPrimaryDimmed {
             isAutoPrimaryDimmed := false
             if (!isManualBlackoutOn && !isManualPrimaryDimOn) {
@@ -8031,38 +8405,7 @@ CheckIdleActivity() {
         }
     }
 
-    deskIdleSec := GetDesktopIdleSec()
-    if (!Desktop_Hide_Enabled || isManualPrimaryDimOn || deskIdleSec <= 0) {
-        if isCursorIdleHidden {
-            SetCursorIdleHidden(false)
-        }
-        if areDesktopIconsHidden {
-            SetDesktopIconsTarget(true)
-        }
-    } else {
-        desktopIdleLimitMs := deskIdleSec * 1000
-        cursorIdleElapsed := now - Max(lastCursorInputTick, lastDesktopIconActiveTick)
-        iconIdleElapsed   := now - lastDesktopIconActiveTick
-
-        if (cursorIdleElapsed >= desktopIdleLimitMs) {
-            if !isCursorIdleHidden {
-                SetCursorIdleHidden(true)
-            }
-        } else if isCursorIdleHidden {
-            SetCursorIdleHidden(false)
-        }
-
-        if (IsEditingFileName() || IsContextMenuOpen()) {
-            lastDesktopIconActiveTick := now
-            if areDesktopIconsHidden {
-                SetDesktopIconsTarget(true)
-            }
-        } else if (iconIdleElapsed >= desktopIdleLimitMs) {
-            if !areDesktopIconsHidden {
-                SetDesktopIconsTarget(false)
-            }
-        }
-    }
+    RunDesktopHideLogic(now)
 
     ; Windows native taskbar auto-hide is controlled via SyncWindowsTaskbarAutoHide()
     activePrimaryAlphaCap := GetActivePrimaryDimAlpha()
@@ -8174,12 +8517,13 @@ CheckIdleActivity() {
 }
 
 ResetAllIdleTimers(now := 0) {
-    global lastPrimaryActiveTick, lastDesktopIconActiveTick, lastExtraActiveTick, prevTimeIdle, extraMonLastActiveTick, lastCursorInputTick
+    global lastPrimaryActiveTick, lastDesktopIconActiveTick, lastExtraActiveTick, prevTimeIdle, extraMonLastActiveTick, lastCursorInputTick, lastCursorMoveTick
     if (now = 0) {
         now := A_TickCount
     }
     lastPrimaryActiveTick     := now
     lastCursorInputTick       := now
+    lastCursorMoveTick        := now
     lastDesktopIconActiveTick := now
     lastExtraActiveTick       := now
     prevTimeIdle              := A_TimeIdle
@@ -8190,12 +8534,13 @@ ResetAllIdleTimers(now := 0) {
 
 ; Resets only Monitor 1 / cursor / desktop-icon idle timers (Monitors 2-5 untouched)
 ResetPrimaryIdleTimers(now := 0) {
-    global lastPrimaryActiveTick, lastDesktopIconActiveTick, prevTimeIdle, lastCursorInputTick
+    global lastPrimaryActiveTick, lastDesktopIconActiveTick, prevTimeIdle, lastCursorInputTick, lastCursorMoveTick
     if (now = 0) {
         now := A_TickCount
     }
     lastPrimaryActiveTick     := now
     lastCursorInputTick       := now
+    lastCursorMoveTick        := now
     lastDesktopIconActiveTick := now
     prevTimeIdle              := A_TimeIdle
 }
@@ -8311,7 +8656,7 @@ WakeManualExtraMon(monIdx, now := 0) {
 ; Activity on a dimmed extra monitor wakes only that monitor (after the post-toggle grace window)
 ProcessManualExtraWake(now, hasCursorPos, curX, curY, activeExtraMon, inputHappened, mouseMoved) {
     global isManualExtraDimOn, manualExtraMonSet, manualExtraStartTick, manualExtraMonStartTick, manualExtraMonAnchorPt
-    global MANUAL_WAKE_GRACE_MS, MANUAL_WAKE_MOVE_PX
+    global MANUAL_WAKE_GRACE_MS, MANUAL_WAKE_MOVE_PX, lastDisplayChangeTick, DISPLAY_SETTLE_MS
 
     if (!isManualExtraDimOn && manualExtraMonSet.Count = 0) {
         return false
@@ -8328,7 +8673,20 @@ ProcessManualExtraWake(now, hasCursorPos, curX, curY, activeExtraMon, inputHappe
         return false
     }
 
-    if !inputHappened {
+    ; Mouse movement on the dimmed monitor wakes it too (not only clicks): it has to travel past a small threshold from the toggle anchor
+    moved := false
+    if (mouseMoved && hasCursorPos) {
+        if manualExtraMonAnchorPt.Has(activeExtraMon) {
+            a := manualExtraMonAnchorPt[activeExtraMon]
+            moved := (Max(Abs(curX - a.x), Abs(curY - a.y)) > MANUAL_WAKE_MOVE_PX)
+        } else {
+            manualExtraMonAnchorPt[activeExtraMon] := { x: curX, y: curY }
+        }
+    }
+    if ((now - lastDisplayChangeTick) < DISPLAY_SETTLE_MS) {
+        moved := false    ; a display change can reposition the cursor
+    }
+    if !(inputHappened || moved) {
         return false
     }
 
@@ -8496,7 +8854,7 @@ PositionPrimaryOverlay() {
 SetDesktopIconsTarget(visible) {
     global areDesktopIconsHidden, targetIconAlpha, currentIconAlpha, activeIconFadeStep, Icon_Fade_Ms, lastDesktopIconActiveTick
 
-    if (!visible && (IsEditingFileName() || IsContextMenuOpen())) {
+    if (!visible && IsDesktopHoldActive(A_TickCount)) {
         lastDesktopIconActiveTick := A_TickCount
         return
     }
@@ -8533,6 +8891,7 @@ StepDesktopIconFade() {
     lvHwnd := GetDesktopListViewHwnd()
     if !lvHwnd {
         SetTimer(iconFadeTimerFn, 0)
+        currentIconAlpha := targetIconAlpha    ; lets EnforceDesktopIconAlpha apply the state once Explorer's list view exists again
         return
     }
 
@@ -8810,36 +9169,46 @@ SetCursorIdleHidden(hidden) {
         return
     }
     isCursorIdleHidden := hidden
+    DebugLogEvent("Idle cursor " (hidden ? "hidden" : "shown"))
     UpdateCursorVisibility()
 }
 
 UpdateCursorVisibility() {
     global isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed, isTestingPrimaryDim, isCursorIdleHidden, areCursorsHidden
-
-    primaryDimActive := isManualBlackoutOn || isManualPrimaryDimOn || isAutoPrimaryDimmed || isTestingPrimaryDim
-    cursorOnPrimary := false
-
-    if primaryDimActive {
-        pt := Buffer(8, 0)
-        if DllCall("GetCursorPos", "Ptr", pt.Ptr) {
-            cursorOnPrimary := IsPointOnPrimaryMonitor(NumGet(pt, 0, "Int"), NumGet(pt, 4, "Int"))
-        }
+    static busy := false
+    if busy {
+        return    ; [hide-fix-4] another timer interrupted a half-finished hide / restore: let the first call finish
     }
+    busy := true
+    try {
+        primaryDimActive := isManualBlackoutOn || isManualPrimaryDimOn || isAutoPrimaryDimmed || isTestingPrimaryDim
+        cursorOnPrimary := false
 
-    shouldHide := (primaryDimActive && cursorOnPrimary) || isCursorIdleHidden
-    if (shouldHide && !areCursorsHidden) {
-        HideSystemCursors()
-    } else if (!shouldHide && areCursorsHidden) {
-        RestoreSystemCursors()
+        if primaryDimActive {
+            pt := Buffer(8, 0)
+            if DllCall("GetCursorPos", "Ptr", pt.Ptr) {
+                cursorOnPrimary := IsPointOnPrimaryMonitor(NumGet(pt, 0, "Int"), NumGet(pt, 4, "Int"))
+            }
+        }
+
+        shouldHide := (primaryDimActive && cursorOnPrimary) || isCursorIdleHidden
+        if (shouldHide && !areCursorsHidden) {
+            HideSystemCursors()
+        } else if (!shouldHide && areCursorsHidden) {
+            RestoreSystemCursors()
+        }
+    } finally {
+        busy := false
     }
 }
 
-HideSystemCursors() {
-    global areCursorsHidden
-    if areCursorsHidden {
+HideSystemCursors(force := false) {
+    global areCursorsHidden, blankCursorHandles
+    if (areCursorsHidden && !force) {
         return
     }
-    cursorIds := [32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32650]
+    ; 32651 (help) was missing from the old list
+    static cursorIds := [32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32650, 32651]
     andMask := Buffer(128, 0xFF)
     xorMask := Buffer(128, 0x00)
     for id in cursorIds {
@@ -8848,11 +9217,95 @@ HideSystemCursors() {
             DllCall("SetSystemCursor", "Ptr", hBlank, "UInt", id)
         }
     }
+    ; [hide-fix-4] Remember the handles Windows reports for these cursors right now. CursorHideGuard compares against them
+    ; (no pixel reading), so a restore by something else is noticed even if the blank cursor is stored in another format.
+    blankCursorHandles := Map()
+    for id in [32512, 32513, 32649] {
+        blankCursorHandles[id] := DllCall("LoadCursor", "Ptr", 0, "Ptr", id, "Ptr")
+    }
     areCursorsHidden := true
+    SetTimer(CursorHideGuard, 250)
+}
+
+; True while the given system cursor is still our blank one (a monochrome cursor with an all-transparent mask)
+IsSystemCursorBlank(id) {
+    hCur := DllCall("LoadCursor", "Ptr", 0, "Ptr", id, "Ptr")
+    if !hCur {
+        return true    ; cannot tell: do not fight it
+    }
+    maskOff := (A_PtrSize = 8) ? 16 : 12
+    ii := Buffer((A_PtrSize = 8) ? 32 : 20, 0)
+    if !DllCall("GetIconInfo", "Ptr", hCur, "Ptr", ii.Ptr, "Int") {
+        return true
+    }
+    hMask  := NumGet(ii, maskOff, "Ptr")
+    hColor := NumGet(ii, maskOff + A_PtrSize, "Ptr")
+    blank := false
+    if (hColor = 0 && hMask) {
+        bm := Buffer(32, 0)
+        if DllCall("GetObjectW", "Ptr", hMask, "Int", (A_PtrSize = 8) ? 32 : 24, "Ptr", bm.Ptr, "Int") {
+            wBytes := NumGet(bm, 12, "Int")
+            h      := NumGet(bm, 8, "Int")
+            total  := wBytes * h
+            half   := total // 2
+            if (half > 0) {
+                buf := Buffer(total, 0)
+                if (DllCall("GetBitmapBits", "Ptr", hMask, "Int", total, "Ptr", buf.Ptr, "Int") > 0) {
+                    blank := (NumGet(buf, 0, "UChar") = 0xFF && NumGet(buf, half, "UChar") = 0x00)
+                }
+            }
+        }
+    }
+    if hMask {
+        DllCall("DeleteObject", "Ptr", hMask)
+    }
+    if hColor {
+        DllCall("DeleteObject", "Ptr", hColor)
+    }
+    return blank
+}
+
+; Windows, a theme change, the eyedropper or another program can quietly put the normal cursors back.
+; While the cursor should be hidden this checks (cheaply) that the blank ones are still in place and re-applies them ONLY if they are not,
+; so there is no constant re-applying that could itself flicker.
+CursorHideGuard() {
+    global areCursorsHidden, blankCursorHandles, eyedropperCursorActive, cursorGuardReapplyCount
+    static strikes := 0, lastForce := 0
+    if !areCursorsHidden {
+        SetTimer(CursorHideGuard, 0)
+        strikes := 0
+        return
+    }
+    if eyedropperCursorActive {
+        return    ; the eyedropper owns the cursors for a moment: do not fight it
+    }
+    ; [hide-fix-4] Handle check instead of the old pixel check: if any of the cursors we blanked now has a different handle,
+    ; something else (theme change, another program, SPI_SETCURSORS) replaced it.
+    intact := true
+    for id, h in blankCursorHandles {
+        if (DllCall("LoadCursor", "Ptr", 0, "Ptr", id, "Ptr") != h) {
+            intact := false
+            break
+        }
+    }
+    if intact {
+        strikes := 0
+        return
+    }
+    ; Three quick tries, then at most one try every 10 s (re-applying over and over could itself flicker)
+    if (strikes >= 3 && (A_TickCount - lastForce) < 10000) {
+        return
+    }
+    strikes += 1
+    lastForce := A_TickCount
+    cursorGuardReapplyCount += 1
+    DebugLogEvent("Cursor guard: the blank cursors were replaced by something else - hiding them again (try " strikes ")")
+    HideSystemCursors(true)
 }
 
 RestoreSystemCursors() {
     global areCursorsHidden
+    SetTimer(CursorHideGuard, 0)
     DllCall("SystemParametersInfo", "UInt", 0x0057, "UInt", 0, "Ptr", 0, "UInt", 0)
     areCursorsHidden := false
 }
@@ -10612,3 +11065,45 @@ BuildPresetsTab(g, dark, tabIdx := 0) {
 ; 15. DEV WORKFLOW HOTKEYS
 ; ==============================================================================
 Hotkey("^!r", (*) => (DebugLogEvent("Dev reload hotkey triggered (Ctrl+Alt+R)"), Reload()))
+
+; ==============================================================================
+; 16. HIDE DIAGNOSTICS (Ctrl+Alt+H) - shows exactly why the cursor / desktop icons are or are not hiding, and copies it to the clipboard
+; ==============================================================================
+Hotkey("^!h", (*) => ShowHideDiagnostics())
+
+ShowHideDiagnostics() {
+    global Desktop_Hide_Enabled, isSessionLocked, isAutomationPaused, isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed
+    global isCursorIdleHidden, areCursorsHidden, areDesktopIconsHidden, lastCursorMoveTick, lastDesktopIconActiveTick
+    global Presets, presetPinned
+    now := A_TickCount
+    out := "Build: " BUILD_ID "`n"
+    out .= "Hide cursor & icons enabled: " (Desktop_Hide_Enabled ? "yes" : "NO") "`n"
+    try out .= "Idle seconds to hide: " GetDesktopIdleSec() "`n"
+    out .= "Session marked locked: " (isSessionLocked ? "YES (blocks everything)" : "no") "`n"
+    out .= "Automation paused: " (isAutomationPaused ? "YES" : "no") "`n"
+    out .= "Manual blackout / manual dim: " (isManualBlackoutOn ? "blackout" : (isManualPrimaryDimOn ? "dim" : "off")) "`n"
+    out .= "Monitor 1 auto-dimmed: " (isAutoPrimaryDimmed ? "yes" : "no") "`n"
+    try {
+        ai := GetActivePresetIdx(true)
+        out .= "Active preset: " (ai ? Presets[ai].name : "none") (IsObject(presetPinned) ? " (switched on by hand)" : "") "`n"
+        out .= "Never-dim preset active: " (PresetNeverDimActive() ? "yes" : "no") "`n"
+    }
+    try out .= "Never-dim / excluded process running: " (IsExcludedProcessRunning() ? "yes" : "no") "`n"
+    try out .= "Competitive game running: " (IsCompGameRunning() ? "yes" : "no") "`n"
+    try out .= "Videos playing on monitors: " GetMoviePlayingMonitorsCached().Count "`n"
+    try out .= "Rename / context-menu hold: " (IsDesktopHoldActive(now) ? "YES (keeps icons visible)" : "no") "`n"
+    out .= "Seconds since mouse moved/clicked: " Round((now - lastCursorMoveTick) / 1000, 1) "`n"
+    out .= "Seconds since desktop activity: " Round((now - lastDesktopIconActiveTick) / 1000, 1) "`n"
+    out .= "Cursor flagged hidden (idle): " (isCursorIdleHidden ? "yes" : "no") " | system cursors blanked: " (areCursorsHidden ? "yes" : "no") "`n"
+    try out .= "Arrow cursor really blank right now: " (IsSystemCursorBlank(32512) ? "yes" : "no") "`n"
+    out .= "Cursor guard re-applies this session: " cursorGuardReapplyCount "`n"
+    out .= "Desktop icons flagged hidden: " (areDesktopIconsHidden ? "yes" : "no") "`n"
+    try {
+        lv := GetDesktopListViewHwnd()
+        out .= "Desktop icon list found: " (lv ? "yes, visible=" (DllCall("IsWindowVisible", "Ptr", lv, "Int") ? "yes" : "no") : "NO") "`n"
+    }
+    out .= "Keyboard/mouse idle (ms): " A_TimeIdle "`n"
+    A_Clipboard := out
+    DebugLogEvent("Hide diagnostics: " StrReplace(out, "`n", " | "))
+    MsgBox(out "`n(copied to the clipboard)", "OLED Engine - hide diagnostics", "Iconi")
+}

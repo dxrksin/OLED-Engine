@@ -118,7 +118,8 @@ FetchLatestRelease() {
     if RegExMatch(json, assetRe, &asset) {
         info["url"] := asset[1]
     }
-    if RegExMatch(json, 'i)sha-?256.{0,12}?([0-9a-f]{64})', &hash) {
+    bodyText := InStr(json, '"body"') ? SubStr(json, InStr(json, '"body"')) : json
+if RegExMatch(bodyText, 'i)sha-?256.{0,12}?([0-9a-f]{64})', &hash) {
         info["hash"] := StrLower(hash[1])
     }
     return info
