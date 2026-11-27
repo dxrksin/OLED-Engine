@@ -1,15 +1,15 @@
 # OLED Engine
 
-Multi-monitor OLED burn-in protection for Windows: per-category idle dimming and #000000 blackout, HDR/SDR profile switching, pixel refresh tracking, and game automation.
+Multi-monitor OLED burn-in protection for Windows: per-category idle dimming and #000000 blackout, smart browser toolbar dimming, HDR/SDR profile switching, pixel refresh tracking, and game automation.
 
 ## Download
 
-Get the latest version from the **[Releases page](../../releases/latest)**. Download `OLED-Engine.zip`.
+Get the latest version from the **[Releases page](../../releases/latest)** and download `OLED-Engine.exe`.
 
 ## Install
 
-1. Right-click the zip and choose **Extract All** (don't run it from inside the zip).
-2. Put the extracted `OLED-Engine` folder somewhere you own, such as `Documents` or `C:\Tools`. Don't use `C:\Program Files`.
+1. Create a dedicated folder somewhere you own, such as `Documents\OLED-Engine` or `C:\Tools\OLED-Engine`. Don't use `C:\Program Files`.
+2. Move `OLED-Engine.exe` into that folder.
 3. Run `OLED-Engine.exe`.
 
 OLED Engine is portable. On first run it creates `config`, `logs` and `backups` folders next to the exe. Your settings live in `config`. To move the app, move the whole folder.
