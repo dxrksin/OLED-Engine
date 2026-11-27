@@ -588,7 +588,8 @@ GetLiveGsyncLabel() {
 GetGsyncControlStatusText() {
     global DraftCfg, AutoCfg, AutoUI
     if AutoUI.Has("ChkGsync") {
-        gsyncAutoOn := !!AutoUI["ChkGsync"].Value
+        gsyncAutoOn := false
+try gsyncAutoOn := !!AutoUI["ChkGsync"].Value
     } else if DraftCfg.Has("GsyncEnabled") {
         gsyncAutoOn := !!DraftCfg["GsyncEnabled"]
     } else {

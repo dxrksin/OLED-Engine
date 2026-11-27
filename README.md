@@ -1,6 +1,6 @@
-Multi-monitor OLED burn-in protection for Windows: per-category idle dimming and #000000 blackout, HDR/SDR profile switching, pixel refresh tracking, and game automation.
+# OLED Engine
 
-<img width="644" height="762" alt="Screenshot 2026-11-26 073627" src="https://github.com/user-attachments/assets/94cf00f0-117f-40ca-8fdb-e5d3d3bdce2a" />
+Multi-monitor OLED burn-in protection for Windows: per-category idle dimming and #000000 blackout, HDR/SDR profile switching, pixel refresh tracking, and game automation.
 
 ## Download
 

@@ -1,31 +1,33 @@
 ﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
+; Enable Per-Monitor v2 DPI awareness before any GUI or tray icon is created
+if !DllCall("SetProcessDpiAwarenessContext", "Ptr", -4, "Ptr") {
+DllCall("SetProcessDPIAware")
+}
 ;@Ahk2Exe-SetMainIcon assets\OLED Engine.ico
 Persistent
 ListLines False
 ProcessSetPriority("BelowNormal")
+; Opt out of Windows power throttling (EcoQoS) and timer coalescing so the 40-120 ms timers stay on time with Settings closed
+try {
+    oledThrottleCfg := Buffer(12, 0)
+    NumPut("UInt", 1, oledThrottleCfg, 0)     ; Version
+    NumPut("UInt", 0x5, oledThrottleCfg, 4)   ; ControlMask: EXECUTION_SPEED (0x1) | IGNORE_TIMER_RESOLUTION (0x4)
+    NumPut("UInt", 0, oledThrottleCfg, 8)     ; StateMask 0 = throttling OFF for both
+    DllCall("kernel32\SetProcessInformation", "Ptr", DllCall("kernel32\GetCurrentProcess", "Ptr"), "Int", 4, "Ptr", oledThrottleCfg.Ptr, "UInt", 12)
+    DllCall("winmm\timeBeginPeriod", "UInt", 1)
+}
 SetWinDelay(-1)
 SetControlDelay(-1)
 #Include %A_ScriptDir%\scripts\App Automation.ahk
 #Include %A_ScriptDir%\scripts\Updater.ahk
+Browser_Dim_Fade_Ms := 350
+BrowserPreviewFadeMs := 350
 
 ; ##############################################################################
 ; ##  @CHANGELOG  -  DEV LOG OF WHAT'S NEW / CHANGED / FIXED                   ##
 ; ##  (search this file for "@CHANGELOG" to jump here)                         ##
 ; ##############################################################################
-; HOW TO USE (you, or the next chat):
-;   1. Add a new entry on TOP of the list below. Newest build first.
-;   2. Entry line format:   TYPE  what changed  (where: function / section)
-;        TYPE = NEW | CHANGE | FIX | REMOVED | KNOWN-ISSUE | TODO
-;   3. Bump BUILD_ID (section 1, right under APP_VERSION) to the new build name.
-;      VERSION RULE: a NEW feature = minor bump (1.0.x -> 1.1.0). Only FIX / CHANGE entries = patch bump (1.1.0 -> 1.1.1).
-;      APP_VERSION is only changed when a release is cut; BUILD_ID changes with every working build.
-;      The startup log and the Ctrl+Alt+H diagnostics print it, so a log always
-;      says which build produced it.
-;   4. Mark every code spot you touch with a comment like  ; [hide-fix-4]
-;      Then searching the file for the build name lists every edit of that build.
-;   5. User-facing release notes (About tab) are separate: search "@WHATS_NEW_IN_APP".
-;
 ; ------------------------------------------------------------------------------
 ; RELEASE 1.1.0 (next)  -  APP_VERSION below still says 1.0.0 until this is released
 ;   NEW   Presets section in the tray menu: switch presets quickly without opening Settings.   (separate chat, date not recorded)
@@ -115,7 +117,7 @@ Wake_Sound_Enabled            := false        ; [true / false] Play a sound when
 Dim_Sound_Name                := "Gentle Bell"        ; [Sound name, same list as above] Sound played on dim / blackout
 Wake_Sound_Name               := "Calm Rise"        ; [Sound name, same list as above] Sound played on wake
 ; --- Monitor 1 SDR / Unified Idle Delays ---
-Primary_SDR_Desktop_Sec       := 23        ; [Seconds] Monitor 1 idle delay on Desktop
+Primary_SDR_Desktop_Sec       := 5        ; [Seconds] Monitor 1 idle delay on Desktop
 Primary_SDR_Normal_Sec        := 35        ; [Seconds] Monitor 1 idle delay in Standard Games
 Primary_SDR_Comp_Sec          := 45        ; [Seconds] Monitor 1 idle delay in Competitive Games
 Primary_SDR_Paused_Sec        := 5        ; [Seconds] Monitor 1 idle delay when a Video is PAUSED
@@ -136,7 +138,7 @@ Extra_Comp_Game_Auto_SDR      := false        ; [true / false] Switch Monitor 2 
 Extra_Dim_Percent             := 73        ; [Percent 0-100] Monitor 2 SDR / Unified dim level (100 = pure #000000 blackout)
 Extra_HDR_Dim_Percent         := 73        ; [Percent 0-100] Monitor 2 HDR dim level (100 = pure #000000 blackout)
 Extra_Fade_Ms                 := 437        ; [Milliseconds] Smooth fade speed for Monitor 2 (0 = instant)
-Extra_SDR_Desktop_Sec         := 15        ; [Seconds] Monitor 2 SDR idle delay on Desktop
+Extra_SDR_Desktop_Sec         := 5        ; [Seconds] Monitor 2 SDR idle delay on Desktop
 Extra_SDR_Normal_Sec          := 5        ; [Seconds] Monitor 2 SDR idle delay in Standard Games
 Extra_SDR_Comp_Sec            := 5        ; [Seconds] Monitor 2 SDR idle delay in Competitive Games
 Extra_SDR_Paused_Sec          := 10        ; [Seconds] Monitor 2 SDR idle delay when a Video is PAUSED
@@ -197,9 +199,10 @@ Mon5_HDR_Paused_Sec           := 10
 ; ==============================================================================
 ; [3] DESKTOP ICONS, CURSOR & STARTUP
 ; ==============================================================================
-Desktop_Hide_Enabled          := false        ; [true / false] Hide cursor & fade desktop icons on idle
-Desktop_Idle_Sec              := 5        ; [Seconds] Idle delay before hiding cursor & fading desktop icons
-Icon_Fade_Ms                  := 350        ; [Milliseconds] Smooth fade speed for desktop icons (0 = instant)
+Desktop_Hide_Enabled          := false        ; [true / false] Fade desktop icons on idle
+Cursor_Hide_Enabled           := false        ; [true / false] Hide the mouse cursor on idle
+Desktop_Idle_Sec              := 2        ; [Seconds] Idle delay before hiding cursor & fading desktop icons
+Icon_Fade_Ms                  := 709        ; [Milliseconds] Smooth fade speed for desktop icons (0 = instant)
 Start_With_Windows            := false        ; [true / false] Launch automatically when signing in to Windows
 Start_Minimized               := false        ; [true / false] Start silently in the system tray without opening Settings
 
@@ -212,7 +215,7 @@ Excluded_Processes_List       := ""        ; [Comma-separated .exe names] Pause 
 ; ==============================================================================
 ; [5] TRAY MENU ORDER & VISIBILITY (Settings & Exit are fixed; IDs: pause, auto_dim, hdr_toggle, hdr_sdr, refresh, blackout, sec_dim, desk_hide, presets, edit, reload)
 ; ==============================================================================
-Tray_Menu_Config              := "pause:1,auto_dim:1,hdr_toggle:1,hdr_sdr:0,refresh:1,blackout:1,sec_dim:1,desk_hide:1,presets:1,edit:0,reload:1"        ; [Ordered comma-separated item:enabled(1/0)]
+Tray_Menu_Config              := "pause:1,auto_dim:1,hdr_toggle:1,hdr_sdr:0,refresh:1,blackout:1,sec_dim:1,desk_hide:1,presets:1,edit:0"        ; [Ordered comma-separated item:enabled(1/0)]
 
 ; ==============================================================================
 ; [6] PER-MONITOR HOTKEYS (BLANK = DISABLED; RESPECTS EACH MONITOR'S DIM LEVEL)
@@ -239,10 +242,27 @@ presetActiveIdx               := 0
 presetCacheTick               := 0
 presetPinned                  := ""        ; preset switched on by hand from the Presets tab (session only)
 TrayPresetsMenu               := Menu()    ; Presets submenu of the tray menu
+TrayHideMenu                  := Menu()    ; Hide Cursor / Desktop Icons submenu of the tray menu
 presetFgExe                   := ""        ; last known focused program, used by focus-only presets
 originalTaskbarAutoHide       := ""
 taskbarChangedByScript        := false
 PresetsIniPath                := ""
+
+; ==============================================================================
+; [6c] BROWSER TABS & TOOLBAR DIMMER (managed on the Browser tab, saved in the presets ini)
+; ==============================================================================
+Browser_Dim_Enabled           := false
+Browser_Dim_Percent           := 100        ; 0-100 (100 = pure black)
+Browser_Dim_Delay_Sec         := 4
+Browser_Dim_VideoOnly         := false
+Browser_Dim_FallbackH         := 90         ; px at 100% scaling, used when the page area can't be measured (Firefox)
+BrowserOverlays               := Map()
+BrowserPreviewUntil           := 0
+BrowserPreviewPct             := 100
+BrowserPreviewH               := 90
+BrowserScanTick               := 0
+Browser_Dim_UseUIA            := false      ; true = ask Windows UI Automation which control has focus. Can lag / freeze the browser - leave OFF
+BrowserUi                     := ""         ; controls of the Browser tab while Settings is open
 
 ; ==============================================================================
 ; [7] RECOGNIZED VIDEO PLAYERS & BROWSERS (editable on the General tab; blank = built-in list)
@@ -274,8 +294,8 @@ Default_Browser_Processes      := Browser_Processes.Clone()
 ; ==============================================================================
 ; 1. CONSTANTS & DERIVED RUNTIME VALUES
 ; ==============================================================================
-APP_VERSION           := "1.1.0"
-BUILD_ID              := "perf-1"   ; dev build name, keep in step with the newest @CHANGELOG entry
+APP_VERSION           := "1.2.0"
+BUILD_ID              := "browser-1"   ; dev build name, keep in step with the newest @CHANGELOG entry
 MAX_MONITORS          := 8
 ExtraDynamicMonCfg    := Map()
 
@@ -422,10 +442,15 @@ isCursorIdleHidden                 := false
 areCursorsHidden                   := false
 blankCursorHandles                 := Map()          ; [hide-fix-4] cursor id -> handle Windows reported right after we blanked it (CursorHideGuard compares against it)
 eyedropperCursorActive             := false          ; [hide-fix-4] true while the Settings colour eyedropper owns the system cursors
-cursorGuardReapplyCount            := 0              ; [hide-fix-4] how many times CursorHideGuard had to re-blank the cursors (shown in Ctrl+Alt+H)
+cursorGuardReapplyCount            := 0
+desktopLvHwndCache                 := 0              ; [hide-fix-5] last desktop list view handle found (used by the WinEvent hook)
+iconWinEventHook                   := 0              ; [hide-fix-5]
+iconWinEventCb                     := 0              ; [hide-fix-5]
+lastIconAlphaMismatchTick          := 0              ; [hide-fix-5]              ; [hide-fix-4] how many times CursorHideGuard had to re-blank the cursors (shown in Ctrl+Alt+H)
 
 areDesktopIconsHidden              := false
 currentIconAlpha                   := 255
+CursorHideChkCtrl                  := ""
 targetIconAlpha                    := 255
 activeIconFadeStep                 := 15
 
@@ -493,6 +518,7 @@ SettingsApplyBtn                   := ""
 SettingsHintCtrl                   := ""
 SettingsLastBannerText             := ""
 SettingsActiveTab                  := 1
+ReleaseNotesGui                    := ""
 HdrSwitchMap                       := Map()
 CareUiRefs                         := Map()
 StatsPromptGui                     := ""
@@ -529,6 +555,7 @@ ResetAllIdleTimers()
 
 RestoreDesktopIconsImmediate()
 RestoreSystemCursors()
+SetTimer(DesktopClickDeselectWatch, 30)    ; clears the icon selection when empty desktop space is clicked (see-through icon list)
 
 initPt := Buffer(8, 0)
 if DllCall("GetCursorPos", "Ptr", initPt.Ptr) {
@@ -555,8 +582,14 @@ OnMessage(0x0200, OnMouseMoveMsg)       ; WM_MOUSEMOVE
 OnMessage(0x0404, OnTrayIconMsg)        ; tray icon clicks (refreshes the Presets submenu right before the menu opens)
 OnMessage(0x0202, OnLeftButtonUp)       ; WM_LBUTTONUP
 OnMessage(0x002B, OnTabDrawItem)        ; WM_DRAWITEM (rounded pill tabs)
+OnMessage(0x001A, OnSettingChangeMsg)   ; [hide-fix-5] WM_SETTINGCHANGE (SPI_SETCURSORS from other programs)
+OnMessage(0x031A, OnSettingChangeMsg)   ; [hide-fix-5] WM_THEMECHANGED
+StartDesktopIconWinEventHook()          ; [hide-fix-5] re-hide desktop icons the moment Explorer shows them
 PresetsIniPath := ScriptBasePath ".presets.ini"
 LoadPresetsFromIni()
+Icon_Opacity_Pct := 100
+try Icon_Opacity_Pct := Max(0, Min(100, Integer(IniRead(IniPath, "General", "IconOpacity", 100))))
+BrowserChromeApplySettings()
 StartGameAutomation()
 if (Run_As_Admin && !A_IsAdmin) {
     try {
@@ -613,8 +646,11 @@ OnScriptRuntimeError(err, mode) {
     global ErrorLogPath, RingLogBuffer, APP_VERSION
     global isAutomationPaused, isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed, Active_HDR_Mode
 
-    try RestoreSystemCursors()
-    try RestoreDesktopIconsImmediate()
+        ; Only give the cursor / icons back when the script is really about to die, not on every recoverable error
+    if (mode = "ExitApp") {
+        try RestoreSystemCursors()
+        try RestoreDesktopIconsImmediate()
+    }
 
     errMsg := "Unhandled error (" mode "): " err.Message " | What: " err.What " | File: " err.File " (line " err.Line ")"
     PushRingLog(errMsg, "ERROR")
@@ -2554,14 +2590,46 @@ AddChangelogRichEdit(g, x, y, w, h, entries, dark) {
         } else if (r[3] = "head") {
             SetFmt(r[1], r[2], 1, accent, 200)
             SetPara(1, 0, 0)
-        } else if (r[3] = "item") {
+               } else if (r[3] = "item") {
             SetFmt(r[1], r[2], 0, plain)
             SetPara(1, 160, 150)                           ; wrapped lines line up under the text
+            ; Bold the lead-in label, e.g. "Added toolbar dimming:" (skips the "• " bullet)
+            itemTxt := SubStr(text, r[1] + 1, r[2] - r[1])
+            colonPos := InStr(itemTxt, ":")
+            if (colonPos > 3 && colonPos <= 70) {
+                SetFmt(r[1] + 2, r[1] + colonPos, 1, plain)
+            }
         }
     }
     DllCall("SendMessageW", "Ptr", hwnd, "UInt", 0x0B1, "Ptr", 0, "Ptr", 0)   ; caret to top
     DllCall("SendMessageW", "Ptr", hwnd, "UInt", 0x0B7, "Ptr", 0, "Ptr", 0)   ; EM_SCROLLCARET
     return re
+}
+
+; Large, resizable release notes window (reuses the same RichEdit builder, so bolding and colors match)
+OpenReleaseNotesWindow(entries) {
+    global UI_Dark_Mode, ReleaseNotesGui
+    if IsObject(ReleaseNotesGui) {
+        try {
+            ReleaseNotesGui.Show()
+            return
+        }
+    }
+    rg := Gui("+Resize +MinSize480x320 +DPIScale", "OLED Engine - Release Notes")
+    ApplyGuiTheme(rg, UI_Dark_Mode)
+    rg.MarginX := 0
+    rg.MarginY := 0
+    bigRe := AddChangelogRichEdit(rg, 12, 12, 760, 560, entries, UI_Dark_Mode)
+    rg.OnEvent("Size", (gObj, minMax, w, h) => (minMax = -1) ? 0 : bigRe.Move(12, 12, w - 24, h - 24))
+    CloseReleaseNotes(*) {
+        global ReleaseNotesGui
+        try ReleaseNotesGui.Destroy()
+        ReleaseNotesGui := ""
+    }
+    rg.OnEvent("Close", CloseReleaseNotes)
+    rg.OnEvent("Escape", CloseReleaseNotes)
+    ReleaseNotesGui := rg
+    ShowWithFade(rg, "w784 h584 Center")
 }
 
 ReflowForeignTabControls(g, knownHwnds) {
@@ -2705,6 +2773,10 @@ OpenSettingsGui(initialTab := 0) {
         hotkeysTabIdx := tabNames.Length + 1
         tabNames.Push("Hotkeys")
         SettingsTabDefaultBanner[hotkeysTabIdx] := ""
+
+        browserTabIdx := tabNames.Length + 1
+        tabNames.Push("Browser")
+        SettingsTabDefaultBanner[browserTabIdx] := ""
 
         careTabIdx := tabNames.Length + 1
         CareTabIdx := careTabIdx
@@ -3034,24 +3106,45 @@ OpenSettingsGui(initialTab := 0) {
         isCareAlert := (careSt.state >= 1)
 
         AddSectionBox(g, lay.bx, 46, lay.bw, 84, "Desktop Icons && Cursor  (0 = Disabled)", UI_Dark_Mode)
-        chkDeskHide := g.AddCheckbox("x42 y68 w" lay.iw " Checked" Desktop_Hide_Enabled, "Hide cursor && fade desktop icons on idle")
+        chkDeskHide := g.AddCheckbox("x42 y68 w" ((lay.iw - 156) // 2) " Checked" Desktop_Hide_Enabled, "Fade desktop icons on idle")
         StyleControlTheme(chkDeskHide, UI_Dark_Mode)
+        chkCursorHide := g.AddCheckbox("x" (42 + (lay.iw - 156) // 2) " y68 w" ((lay.iw - 156) // 2) " Checked" Cursor_Hide_Enabled, "Hide cursor on idle")
+        StyleControlTheme(chkCursorHide, UI_Dark_Mode)
+        CursorHideChkCtrl := chkCursorHide
+        RegisterTip(chkDeskHide, "Hides the mouse cursor and fades desktop icons when idle. Press Ctrl+Alt+C anytime to bring the cursor back.")
 
-        t21 := g.AddText("x42 y98 w110 +0x100", "Idle Delay (s)")
+        t21 := g.AddText("x" (lay.ir - 148) " y70 w86 +0x100", "Idle Delay (s)")
         StyleControlTheme(t21, UI_Dark_Mode)
-        edtDeskIdle := g.AddEdit("x156 y95 w54 Number")
+        edtDeskIdle := g.AddEdit("x" (lay.ir - 54) " y66 w54 Number")
         StyleControlTheme(edtDeskIdle, UI_Dark_Mode)
         edtDeskIdle.OnEvent("Change", MarkSettingsDirty)
         udDesk := g.AddUpDown("Range0-3600", Desktop_Idle_Sec)
+                tIconFade := g.AddText("x" lay.ix " y95 w72 +0x100", "Fade")
+        StyleControlTheme(tIconFade, UI_Dark_Mode)
+        sldIconFade := g.AddSlider("x" (lay.ix + 74) " y93 w" (lay.colW - 74 - 58) " NoTicks ToolTip +AltSubmit Range0-2000", Icon_Fade_Ms)
+        txtIconFade := g.AddText("x" (lay.ix + lay.colW - 54) " y95 w54 +0x100", Icon_Fade_Ms " ms")
+        tIconOpa := g.AddText("x" lay.c2x " y95 w72 +0x100", "Opacity")
+        StyleControlTheme(tIconOpa, UI_Dark_Mode)
+        sldIconOpa := g.AddSlider("x" (lay.c2x + 74) " y93 w" (lay.colW - 74 - 50) " NoTicks ToolTip +AltSubmit Range0-100", Icon_Opacity_Pct)
+        txtIconOpa := g.AddText("x" (lay.c2x + lay.colW - 46) " y95 w46 +0x100", Icon_Opacity_Pct "%")
+        StyleControlTheme(sldIconFade, UI_Dark_Mode)
+        StyleControlTheme(sldIconOpa, UI_Dark_Mode)
+        sldIconFade.OnEvent("Change", (*) => (txtIconFade.Text := sldIconFade.Value " ms", DllCall("RedrawWindow", "Ptr", sldIconFade.Hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0101), MarkSettingsDirty()))
+        sldIconOpa.OnEvent("Change", (*) => (txtIconOpa.Text := sldIconOpa.Value "%", SetIconOpacityPct(sldIconOpa.Value), DllCall("RedrawWindow", "Ptr", sldIconOpa.Hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0101), MarkSettingsDirty()))
+        RegisterTip(sldIconFade, "How long desktop icons take to fade out when idle and back in on wake. 0 = instant (no fade).")
+        RegisterTip(sldIconOpa, "How visible desktop icons are when active. Icons fully disappear when idle. 100% = normal, 0% = never visible.")
         RegisterTip(t21, "Idle delay (in seconds) before hiding the mouse cursor and fading out desktop icons.")
         RegisterTip(edtDeskIdle, "Idle delay (in seconds) before hiding the mouse cursor and fading out desktop icons.")
 
-        deskHideDependentCtrls := [t21, edtDeskIdle, udDesk]
+               deskIconCtrls  := [tIconFade, sldIconFade, txtIconFade, tIconOpa, sldIconOpa, txtIconOpa]
+        deskDelayCtrls := [t21, edtDeskIdle, udDesk]
         syncDeskHideState := (markDirty := true) => (
-            SetControlsEnabled(deskHideDependentCtrls, !!chkDeskHide.Value),
+            SetControlsEnabled(deskIconCtrls, !!chkDeskHide.Value),
+            SetControlsEnabled(deskDelayCtrls, !!chkDeskHide.Value || !!chkCursorHide.Value),
             (markDirty ? MarkSettingsDirty() : 0)
         )
         chkDeskHide.OnEvent("Click", (*) => syncDeskHideState(true))
+        chkCursorHide.OnEvent("Click", (*) => (SetCursorHideEnabled(chkCursorHide.Value), syncDeskHideState(true)))
         syncDeskHideState(false)
 
         boxCareRefresh := AddSectionBox(g, lay.bx, 138, lay.bw, 180, "Pixel Refresh", UI_Dark_Mode)
@@ -3496,6 +3589,9 @@ OpenSettingsGui(initialTab := 0) {
         tabs.UseTab(presetsTabIdx)
         BuildPresetsTab(g, UI_Dark_Mode, presetsTabIdx)
 
+        tabs.UseTab(browserTabIdx)
+        BuildBrowserTab(g, UI_Dark_Mode)
+
         preAutoHwnds := Map()
         for preAutoCtl in g {
             preAutoHwnds[preAutoCtl.Hwnd] := 1
@@ -3549,9 +3645,32 @@ OpenSettingsGui(initialTab := 0) {
         aboutY += aboutBoxH + 8
 
         logEditH := 220
-        boxLog := AddSectionBox(g, lay.bx, aboutY, lay.bw, 24 + logEditH + 14, "What's New (v" APP_VERSION ")", UI_Dark_Mode)
-        ; @WHATS_NEW_IN_APP  user-facing release notes shown on the About tab (the developer log is @CHANGELOG at the top of the file)
+         boxLog := AddSectionBox(g, lay.bx, aboutY, lay.bw, 24 + logEditH + 14, "", UI_Dark_Mode)
+                        logTitleText := "What's New (v" APP_VERSION ")  -  click to expand ↗"
+        txtLogTitle := g.AddText("x" (lay.bx + 10) " y" (aboutY - 2) " w340 h20 +0x100", logTitleText)
+        txtLogTitle.SetFont("s9.5 bold " (UI_Dark_Mode ? "cFFFFFF" : "c000000"), "Segoe UI")
+        ; Shrink the label to exactly the width of its bold text so no gap is cut into the box border
+        hdcT := DllCall("GetDC", "Ptr", txtLogTitle.Hwnd, "Ptr")
+        hfT := SendMessage(0x31, 0, 0, txtLogTitle.Hwnd)          ; WM_GETFONT
+        oldT := DllCall("SelectObject", "Ptr", hdcT, "Ptr", hfT, "Ptr")
+        szT := Buffer(8, 0)
+        DllCall("GetTextExtentPoint32W", "Ptr", hdcT, "Str", logTitleText, "Int", StrLen(logTitleText), "Ptr", szT)
+        DllCall("SelectObject", "Ptr", hdcT, "Ptr", oldT)
+        DllCall("ReleaseDC", "Ptr", txtLogTitle.Hwnd, "Ptr", hdcT)
+        txtLogTitle.Move(, , Round(NumGet(szT, 0, "Int") / dpiScale) + 6)
         changelogEntries := [
+            ["Version", "1.2.0"],
+            ["New", "Browser Toolbar Dimming: Integrated smart auto-dimming and blackout for browser toolbars across all major browsers, supporting fullscreen/maximized windows, any resolution, and both horizontal and vertical monitors."],
+            ["New", "Window-Tracked Toolbar Overlays: Browser toolbar overlays now anchor directly to the active browser window and follow its position smoothly as you move or resize it."],
+            ["New", "Desktop Icon Opacity & Fade Controls: Added a fade-transition slider for desktop icons along with an opacity slider to control icon visibility levels."],
+            ["New", "Cursor Restore Hotkey: Added a global Ctrl + Alt + C hotkey to immediately restore the mouse cursor if it becomes hidden or goes missing."],
+            ["New", "Independent Cursor & Icon Toggles: Separated cursor hiding and desktop icon hiding into standalone toggles so each feature operates independently."],
+            ["Fixes", "Secondary Monitor Wake Failure: Fixed an issue where secondary displays dimmed properly but failed to wake when the primary display was not indexed as Monitor 1; all monitors now wake reliably at manual-dim speed with a failsafe to clear stuck overlays."],
+            ["Fixes", "Settings UI Blur & Scaling: Fixed DPI scaling and rendering issues that caused the Settings GUI to look blurry or pixelated."],
+            ["Fixes", "Persistent Hidden Cursor on Launch & Exit: Disabled cursor hiding by default on fresh installs and ensured the system cursor always restores cleanly when exiting the app."],
+            ["Fixes", "Mid-Session Cursor Flicker & Icon Hiding: Decoupled cursor and desktop icon hiding into separate feature loops to reduce mid-session flickering and visibility issues."],
+            ["Performance", "General Performance & Wake Speed: Applied general runtime optimizations and accelerated secondary monitor wake routines so dimming overlays clear instantaneously."],
+            ["Improvements", "Help & About Layout: Resized and reorganized the Help / About tab for a cleaner, less cluttered release notes display."],
             ["Version", "1.1.0"],
             ["New", "Presets in the tray menu let you switch without opening Settings."],
             ["New", "Press Ctrl+Alt+H for a diagnostic report on dimming, automation, presets, games, video, cursor and desktop icons, copied to your clipboard."],
@@ -3562,14 +3681,17 @@ OpenSettingsGui(initialTab := 0) {
             ["First Release", "Multi-monitor OLED burn-in protection with idle dimming, HDR/SDR switching, pixel refresh tracking, game automation and in-app updates."]
         ]
         edtChangelog := AddChangelogRichEdit(g, lay.ix, aboutY + 24, lay.iw, logEditH, changelogEntries, UI_Dark_Mode)
+        txtLogTitle.OnEvent("Click", (*) => OpenReleaseNotesWindow(changelogEntries))
+        RegisterTip(txtLogTitle, "Click to open the release notes in a large, resizable window.")
         aboutY += 24 + logEditH + 14 + 8
 
-        helpLines := [
-            "• 0 = Disabled: Set any idle delay (s) or dim level (%) to 0 to turn off automatic dimming for that category.",
-            "• Monitors 2–5 Support: Configure up to 5 displays independently; moving the cursor or clicking wakes only that display.",
-            "• Hotkeys: No hotkeys are set by default. Record one per monitor in the Hotkeys tab to toggle its dim / blackout.",
-            "• Instant Reload: Press Ctrl+Alt+R anytime to reload OLED Engine.ahk immediately."
-        ]
+                helpLines := [
+            "• 0 = Disabled: an idle delay (s) or dim level (%) of 0 turns that category off.",
+            "• Monitors 2–5: each display is independent; activity wakes only that display.",
+            "• Hotkeys: none by default. Record one per monitor in the Hotkeys tab.",
+            "• Cursor missing? Press Ctrl+Alt+C to bring it back instantly."
+             ]
+
         aboutLater := []
         boxHelp := AddSectionBox(g, lay.bx, aboutY, lay.bw, 100, "Quick Help && Controls", UI_Dark_Mode)
         aboutLater.Push(boxHelp)
@@ -3579,7 +3701,7 @@ OpenSettingsGui(initialTab := 0) {
             StyleControlTheme(helpCtl, UI_Dark_Mode)
             helpCtl.GetPos(, , , &helpLineH)
             aboutLater.Push(helpCtl)
-            helpY += helpLineH + 8
+            helpY += helpLineH + 4
         }
         helpBoxH := helpY - aboutY + 4
         boxHelp.Move(, , , helpBoxH)
@@ -3608,15 +3730,16 @@ OpenSettingsGui(initialTab := 0) {
         boxCrash.Move(, , , crashBoxH)
         aboutY += crashBoxH
 
-        ; Safety net: if the text ever needs more room than the tab has, the scrolling changelog gives way.
+               ; Fit the What's New box to the room the other sections leave: grows when there is space, shrinks when tight.
         aboutOverflow := aboutY - (14 + tabH - 12)
-        if (aboutOverflow > 0) {
-            aboutShrink := Min(aboutOverflow, logEditH - 60)
-            edtChangelog.Move(, , , logEditH - aboutShrink)
-            boxLog.Move(, , , 24 + logEditH - aboutShrink + 14)
+        newLogH := Max(130, logEditH - aboutOverflow)
+        aboutShift := newLogH - logEditH
+        if (aboutShift != 0) {
+            edtChangelog.Move(, , , newLogH)
+            boxLog.Move(, , , 24 + newLogH + 14)
             for aboutCtl in aboutLater {
                 aboutCtl.GetPos(, &aboutCy)
-                aboutCtl.Move(, aboutCy - aboutShrink)
+                aboutCtl.Move(, aboutCy + aboutShift)
             }
         }
 
@@ -3654,6 +3777,7 @@ OpenSettingsGui(initialTab := 0) {
 
         collectAndApply := (closeAfter) => (
             SetSoundSelections(ddlDimSound.Text, ddlWakeSound.Text),
+            CommitBrowserTab(),
             CommitSettingsFromGui(
                 closeAfter,
                 chkDarkMode.Value, chkDebugLog.Value, edtDbgLogPath.Value,
@@ -3664,7 +3788,7 @@ OpenSettingsGui(initialTab := 0) {
                 edtSdrDesk.Value, edtSdrNorm.Value, edtSdrComp.Value, edtSdrPause.Value,
                 edtHdrDesk.Value, edtHdrNorm.Value, edtHdrComp.Value, edtHdrPause.Value,
                 extraMonTabCtrls,
-                chkDeskHide.Value, edtDeskIdle.Value, Icon_Fade_Ms,
+                chkDeskHide.Value, edtDeskIdle.Value, sldIconFade.Value,
                 chkStartWin.Value, chkStartMin.Value, chkCareTbar.Value,
                 edtCompGames.Value, edtExcludedProcs.Value, trayDraftRef, hkControlsMap,
                 edtMediaPlayers.Value, edtBrowsers.Value
@@ -4257,6 +4381,8 @@ LoadSettingsFromIni() {
     Wake_Sound_Enabled            := ReadIniBool("General", "WakeSound", IsSet(Wake_Sound_Enabled) ? Wake_Sound_Enabled : false)
     Sound_Volume_Step             := ReadIniInt("General", "SoundVol", IsSet(Sound_Volume_Step) ? Sound_Volume_Step : 50)
     Desktop_Hide_Enabled          := ReadIniBool("General", "DeskHide", IsSet(Desktop_Hide_Enabled) ? Desktop_Hide_Enabled : false)
+    try SetCursorHideEnabled(CursorHideChkCtrl.Value)
+    LoadCursorHideSetting()
     Desktop_Idle_Sec              := ReadIniInt("General", "DeskIdle", IsSet(Desktop_Idle_Sec) ? Desktop_Idle_Sec : 15)
     Icon_Fade_Ms                  := ReadIniInt("General", "IconFade", IsSet(Icon_Fade_Ms) ? Icon_Fade_Ms : 300)
     Start_With_Windows            := ReadIniBool("General", "StartWin", IsSet(Start_With_Windows) ? Start_With_Windows : false)
@@ -4323,6 +4449,7 @@ SaveSettingsToIni() {
     IniWrite((IsSet(Wake_Sound_Enabled) && Wake_Sound_Enabled) ? 1 : 0,                       IniPath, "General", "WakeSound")
     IniWrite(IsSet(Sound_Volume_Step) ? Sound_Volume_Step : 50,                               IniPath, "General", "SoundVol")
     IniWrite((IsSet(Desktop_Hide_Enabled) && Desktop_Hide_Enabled) ? 1 : 0,                   IniPath, "General", "DeskHide")
+    IniWrite((IsSet(Cursor_Hide_Enabled) && Cursor_Hide_Enabled) ? 1 : 0, IniPath, "General", "CursorHide")
     IniWrite(IsSet(Desktop_Idle_Sec) ? Desktop_Idle_Sec : 15,                                 IniPath, "General", "DeskIdle")
     IniWrite(IsSet(Icon_Fade_Ms) ? Icon_Fade_Ms : 300,                                        IniPath, "General", "IconFade")
     IniWrite((IsSet(Start_With_Windows) && Start_With_Windows) ? 1 : 0,                       IniPath, "General", "StartWin")
@@ -4929,6 +5056,7 @@ SyncSettingsLiveRefreshTimer(*) {
 }
 
 CloseSettingsGui(*) {
+    BrowserTabClosed()
     global SettingsGui, SettingsTabsCtrl, SettingsTabDefaultBanner, SettingsTabTipMap, GroupTitleTips, HdrSwitchMap, CareUiRefs
     global SettingsApplyBtn, SettingsHintCtrl, SettingsLastBannerText, isDraggingTrayRow, dragTraySourceRow, lastHoveredKey
     global LiveStatusRefs, lastIconEnforceTick
@@ -5108,8 +5236,10 @@ CommitSettingsFromGui(
             StartPrimaryOverlayFade(activePrimaryAlphaCap)
         }
     }
-    if (!Desktop_Hide_Enabled) {
+        if (!Cursor_Hide_Enabled) {
         SetCursorIdleHidden(false)
+    }
+    if (!Desktop_Hide_Enabled) {
         SetDesktopIconsTarget(true)
     }
     activeExtraAlphaCap := GetActiveExtraDimAlpha()
@@ -5256,11 +5386,12 @@ SaveSettingsToScript() {
         }
 
         SetScriptVar(&code, "Desktop_Hide_Enabled",          Desktop_Hide_Enabled ? "true" : "false")
+
         SetScriptVar(&code, "Desktop_Idle_Sec",              Desktop_Idle_Sec)
         SetScriptVar(&code, "Icon_Fade_Ms",                  Icon_Fade_Ms)
         SetScriptVar(&code, "Start_With_Windows",            Start_With_Windows ? "true" : "false")
         SetScriptVar(&code, "Start_Minimized",               Start_Minimized ? "true" : "false")
-
+        SetScriptVar(&code, "Cursor_Hide_Enabled",           Cursor_Hide_Enabled ? "true" : "false")
         SetScriptVar(&code, "Comp_Games_List",               Comp_Games_List, true)
         SetScriptVar(&code, "Excluded_Processes_List",       Excluded_Processes_List, true)
         SetScriptVar(&code, "Media_Players_List",            Media_Players_List, true)
@@ -5505,9 +5636,7 @@ GetDefaultTrayItems() {
         { id: "sec_dim",    enabled: true },
         { id: "desk_hide",  enabled: true },
         { id: "presets",    enabled: true },
-        { id: "edit",       enabled: false },
-        { id: "reload",     enabled: false }
-    ]
+   ]
 }
 
 CloneTrayItems(src) {
@@ -7400,9 +7529,10 @@ SetupTrayMenu() {
                 } else if (isManualExtraDimOn || isAutoExtraDimmed || manualExtraMonSet.Count > 0) {
                     tray.Check(label)
                 }
-            case "desk_hide":
-                tray.Add(label, ToggleDesktopIconsAndCursorNow)
-                if Desktop_Hide_Enabled {
+                        case "desk_hide":
+                RefreshTrayHideMenu()
+                tray.Add(label, TrayHideMenu)
+                if (Desktop_Hide_Enabled || Cursor_Hide_Enabled) {
                     tray.Check(label)
                 } else {
                     tray.Uncheck(label)
@@ -7445,6 +7575,35 @@ OnTrayIconMsg(wParam, lParam, msg, hwnd) {
     ; Right click (0x205) / context menu (0x7B): refresh the ticks and names just before the menu opens. Return nothing so the normal menu still shows.
     if (lParam = 0x205 || lParam = 0x7B) {
         try RefreshTrayPresetsMenu()
+        try RefreshTrayHideMenu()
+    }
+}
+
+RefreshTrayHideMenu() {
+    global TrayHideMenu, Desktop_Hide_Enabled, Cursor_Hide_Enabled
+    TrayHideMenu.Delete()
+    TrayHideMenu.Add("Hide Cursor on Idle", ToggleCursorHideNow)
+    TrayHideMenu.Add("Fade Desktop Icons on Idle", ToggleDesktopIconsAndCursorNow)
+    if Cursor_Hide_Enabled {
+        TrayHideMenu.Check("Hide Cursor on Idle")
+    }
+    if Desktop_Hide_Enabled {
+        TrayHideMenu.Check("Fade Desktop Icons on Idle")
+    }
+}
+
+ToggleCursorHideNow(*) {
+    global Cursor_Hide_Enabled, SettingsGui, SettingsActiveTab
+    SetCursorHideEnabled(!Cursor_Hide_Enabled)   ; also puts the cursor back when switched off
+    if Cursor_Hide_Enabled {
+        ResetAllIdleTimers()
+    }
+    SaveSettingsToScript()
+    SetupTrayMenu()
+    if IsObject(SettingsGui) {
+        savedTab := SettingsActiveTab
+        CloseSettingsGui()
+        OpenSettingsGui(savedTab)
     }
 }
 
@@ -7655,10 +7814,8 @@ ToggleExtraDimNow(*) {
 ToggleDesktopIconsAndCursorNow(*) {
     global Desktop_Hide_Enabled, SettingsGui, SettingsActiveTab
     Desktop_Hide_Enabled := !Desktop_Hide_Enabled
-    if !Desktop_Hide_Enabled {
-        SetCursorIdleHidden(false)
+        if !Desktop_Hide_Enabled {
         SetDesktopIconsTarget(true)
-        UpdateCursorVisibility()
     } else {
         ResetAllIdleTimers()
     }
@@ -7778,7 +7935,7 @@ SetWakePoll(enable) {
 ; Hook-free wake detection. Runs only while something is dimmed or hidden.
 FastWakePoll(resetBaseline := false) {
     global isSessionLocked, areDesktopIconsHidden, lastDesktopIconActiveTick, wakeHookInitX, wakeHookInitY, MANUAL_WAKE_MOVE_PX
-    global isManualExtraDimOn, manualExtraMonSet
+    global isManualExtraDimOn, manualExtraMonSet, isAutoExtraDimmed
     static prevIdle := 0, prevL := false, prevR := false, prevX := -99999, prevY := -99999
     static rcL := 0, rcT := 0, rcR := 0, rcB := 0, rectTick := 0
 
@@ -7809,8 +7966,9 @@ FastWakePoll(resetBaseline := false) {
 
     ; [hide-fix-4] Keep the pointer hidden / shown in step with where it is every 40 ms (the idle loop only runs every 120 ms,
     ; every 1 s during competitive games), and put hidden desktop icons back to hidden quickly if Explorer showed them again.
-    UpdateCursorVisibility()
-    EnforceDesktopIconAlpha(now)
+        SafeRun(UpdateCursorVisibility, "cursor visibility")
+    SafeRun(CursorHideGuard, "cursor guard")
+    SafeRun(EnforceDesktopIconAlpha.Bind(now), "icon enforce")
 
     ; Monitor 1 rectangle, refreshed every 2 seconds
     if (now - rectTick > 2000) {
@@ -7858,7 +8016,7 @@ FastWakePoll(resetBaseline := false) {
             ; (the grace window and the move threshold keep jitter from doing it).
             if (lPress || rPress) {
                 TriggerInstantWake(curX, curY, true, false)
-            } else if (isManualExtraDimOn || manualExtraMonSet.Count > 0) {
+                        } else if (isManualExtraDimOn || manualExtraMonSet.Count > 0 || isAutoExtraDimmed) {
                 TriggerInstantWake(curX, curY, false, false)
             }
         } else {
@@ -7983,26 +8141,64 @@ IsWindowHung(hwnd) {
 
 ; True while a rename / context menu is holding the icons visible. If that "hold" has lasted over 30 s and the
 ; user is not touching anything, it is a leftover Explorer popup window, not a real menu, so it stops blocking the hide.
+; True when the window with focus is the desktop / taskbar / Explorer's own popups. A rename or desktop menu can only
+; exist while one of those has focus; a menu or popup of the app you are typing in must not hold the icons visible.
+IsShellForeground(&cls) {
+    static shell := Map("Progman", 1, "WorkerW", 1, "Shell_TrayWnd", 1, "Shell_SecondaryTrayWnd", 1
+        , "XamlExplorerHostPopupWindow", 1, "#32768", 1, "Windows.UI.Core.CoreWindow", 1
+        , "NotifyIconOverflowWindow", 1, "TopLevelWindowForOverflowXamlIsland", 1
+        , "ForegroundStaging", 1, "MultitaskingViewFrame", 1)
+    cls := ""
+    fg := DllCall("GetForegroundWindow", "Ptr")
+    if !fg {
+        return true
+    }
+    try cls := WinGetClass("ahk_id " fg)
+    return (cls = "" || shell.Has(cls))
+}
+
 IsDesktopHoldActive(now) {
-    static holdSince := 0, loggedStale := false
-    if !(IsEditingFileName() || IsContextMenuOpen()) {
+    static holdSince := 0, loggedStale := false, staleLatched := false
+    isEdit := IsEditingFileName()
+    isMenu := !isEdit && IsContextMenuOpen()
+    if !(isEdit || isMenu) {
         holdSince := 0
         loggedStale := false
+        staleLatched := false
+        return false
+    }
+    fgCls := ""
+    if !IsShellForeground(&fgCls) {
+        if (holdSince != 0) {
+            DebugLogEvent("Desktop hold released: focus is on a normal app (" fgCls ")")
+        }
+        ; A rename is cancelled when focus leaves. A menu keeps its start time, so a leftover popup is
+        ; recognised as stale at once when the desktop gets focus again.
+        if isEdit {
+            holdSince := 0
+        }
         return false
     }
     if (holdSince = 0) {
         holdSince := now
+        DebugLogEvent("Desktop hold started (" (isEdit ? "rename" : "menu") ") - foreground: " fgCls)
     }
-    if ((now - holdSince) > 30000 && A_TimeIdle > 5000) {
+    if staleLatched {
+        return false
+    }
+    ; A rename box can stay open a long time. A menu nobody touches for a few seconds is a leftover popup.
+    staleAfterMs := isEdit ? 30000 : 8000
+    staleIdleMs  := isEdit ? 5000 : 3000
+    if ((now - holdSince) > staleAfterMs && A_TimeIdle > staleIdleMs) {
+        staleLatched := true
         if !loggedStale {
             loggedStale := true
-            DebugLogEvent("Desktop hide: ignoring a rename / context-menu hold that has lasted over 30 s (stale Explorer popup)")
+            DebugLogEvent("Desktop hide: ignoring a rename / context-menu hold that has lasted too long (stale Explorer popup)")
         }
         return false
     }
     return true
 }
-
 IsEditingFileName() {
     if (lvHwnd := GetDesktopListViewHwnd()) {
         try {
@@ -8079,12 +8275,71 @@ IsPointInDesktopShell(curX, curY) {
     return false
 }
 
+; While the icon list is see-through, Windows lets clicks on its empty background fall through to the desktop behind it,
+; so the list never hears the click and keeps its selection. Catch that click here and clear the selection ourselves.
+DesktopClickDeselectWatch() {
+    global Desktop_Hide_Enabled, areDesktopIconsHidden, isSessionLocked
+        static prevL := false, prevR := false
+    lDown := GetKeyState("LButton", "P")
+    rDown := GetKeyState("RButton", "P")
+    pressed := (lDown && !prevL) || (rDown && !prevR)    ; left OR right click
+    prevL := lDown
+    prevR := rDown
+    if (!pressed || !Desktop_Hide_Enabled || areDesktopIconsHidden || isSessionLocked) {
+        return
+    }
+    SafeRun(DeselectDesktopOnEmptyClick, "desktop deselect")
+}
+
+DeselectDesktopOnEmptyClick() {
+    pt := Buffer(8, 0)
+    if !DllCall("GetCursorPos", "Ptr", pt.Ptr) {
+        return
+    }
+    hwnd := DllCall("WindowFromPoint", "Int64", NumGet(pt, 0, "Int64"), "Ptr")
+    if !hwnd {
+        return
+    }
+    cls := ""
+    try cls := WinGetClass("ahk_id " hwnd)
+    ; Only a click that landed on the desktop BEHIND the icon list (empty space). A click on an icon reaches the list itself.
+    if (cls != "Progman" && cls != "WorkerW" && cls != "SHELLDLL_DefView") {
+        return
+    }
+    lv := GetDesktopListViewHwnd()
+    if (!lv || IsWindowHung(lv) || !DllCall("IsWindowVisible", "Ptr", lv, "Int")) {
+        return
+    }
+    pid := 0
+    DllCall("GetWindowThreadProcessId", "Ptr", lv, "UInt*", &pid, "UInt")
+    hProc := DllCall("OpenProcess", "UInt", 0x28, "Int", 0, "UInt", pid, "Ptr")   ; VM_OPERATION | VM_WRITE
+    if !hProc {
+        return
+    }
+    try {
+        remote := DllCall("VirtualAllocEx", "Ptr", hProc, "Ptr", 0, "UPtr", 128, "UInt", 0x3000, "UInt", 4, "Ptr")
+        if remote {
+            item := Buffer(128, 0)
+            NumPut("UInt", 0, item, 12)    ; state: nothing selected
+            NumPut("UInt", 3, item, 16)    ; stateMask: LVIS_FOCUSED | LVIS_SELECTED
+            written := 0
+            if DllCall("WriteProcessMemory", "Ptr", hProc, "Ptr", remote, "Ptr", item.Ptr, "UPtr", 128, "UPtr*", &written, "Int") {
+                res := 0
+                ; LVM_SETITEMSTATE (0x102B) with item -1 = every icon
+                DllCall("SendMessageTimeoutW", "Ptr", lv, "UInt", 0x102B, "Ptr", -1, "Ptr", remote, "UInt", 0x2, "UInt", 200, "Ptr*", &res, "Ptr")
+            }
+            DllCall("VirtualFreeEx", "Ptr", hProc, "Ptr", remote, "UPtr", 0, "UInt", 0x8000)
+        }
+    }
+    DllCall("CloseHandle", "Ptr", hProc)
+}
+
 RestoreDesktopIconsImmediate() {
     global areDesktopIconsHidden, targetIconAlpha, currentIconAlpha, lastDesktopIconActiveTick
     lastDesktopIconActiveTick := A_TickCount
     areDesktopIconsHidden := false
-    targetIconAlpha := 255
-    currentIconAlpha := 255
+    targetIconAlpha := IconVisibleAlpha()
+    currentIconAlpha := targetIconAlpha
     SetTimer(StepDesktopIconFade, 0)
     SetDesktopIconsTarget(true)
 }
@@ -8098,41 +8353,81 @@ IsDesktopClick(lBtnDown, prevLButtonDown, rBtnDown, prevRButtonDown, curX, curY)
     return IsPointInDesktopShell(curX, curY)
 }
 
-; Hides / restores the cursor and the desktop icons on idle. Runs on every idle tick, including while a "never dim" preset is active.
-RunDesktopHideLogic(now) {
-    global Desktop_Hide_Enabled, isManualPrimaryDimOn, isCursorIdleHidden, areDesktopIconsHidden
-    global lastCursorMoveTick, lastDesktopIconActiveTick
+SetCursorHideEnabled(val) {
+    global Cursor_Hide_Enabled, IniPath
+    Cursor_Hide_Enabled := !!val
+    try IniWrite(Cursor_Hide_Enabled ? 1 : 0, IniPath, "General", "CursorHide")
+    if !Cursor_Hide_Enabled {
+        SetCursorIdleHidden(false)
+    }
+}
 
+LoadCursorHideSetting() {
+    global Cursor_Hide_Enabled, IniPath
+    try Cursor_Hide_Enabled := (IniRead(IniPath, "General", "CursorHide", Cursor_Hide_Enabled ? "1" : "0") = "1")
+}
+
+; Hides / restores the cursor and the desktop icons on idle. Runs on every idle tick, including while a "never dim" preset is active.
+; Cursor and icons now run completely separately: each has its own on/off check, its own timer and its own error
+; guard, so a problem in one can never stop the other. The cursor goes first so a slow Explorer cannot delay it.
+RunDesktopHideLogic(now) {
+    SafeRun(RunCursorHideLogic.Bind(now), "cursor hide")
+    SafeRun(RunIconHideLogic.Bind(now), "icon hide")
+}
+
+SafeRun(fn, label) {
+    try {
+        fn()
+    } catch as e {
+        DebugLogEvent("Error in " label ": " e.Message)
+    }
+}
+
+; Cursor: hides after the idle time and comes back on real mouse movement or a click. Nothing else can hold it
+; (no menu / rename check), so it does not depend on anything Explorer or another app is doing.
+RunCursorHideLogic(now) {
+    global Cursor_Hide_Enabled, isManualPrimaryDimOn, isCursorIdleHidden, lastCursorMoveTick
     deskIdleSec := GetDesktopIdleSec()
-    if (!Desktop_Hide_Enabled || isManualPrimaryDimOn || deskIdleSec <= 0) {
+    cursorOn := (Cursor_Hide_Enabled && !isManualPrimaryDimOn && deskIdleSec > 0)
+    if !cursorOn {
         if isCursorIdleHidden {
             SetCursorIdleHidden(false)
         }
-        if areDesktopIconsHidden {
-            SetDesktopIconsTarget(true)
-        }
         return
     }
-
-    desktopIdleLimitMs := deskIdleSec * 1000
-    cursorIdleElapsed := now - lastCursorMoveTick
-    iconIdleElapsed   := now - lastDesktopIconActiveTick
-
-    if (cursorIdleElapsed >= desktopIdleLimitMs) {
+    if ((now - lastCursorMoveTick) >= deskIdleSec * 1000) {
         if !isCursorIdleHidden {
             SetCursorIdleHidden(true)
         }
     } else if isCursorIdleHidden {
         SetCursorIdleHidden(false)
     }
+}
 
-    if IsDesktopHoldActive(now) {
-        lastDesktopIconActiveTick := now
-        lastCursorMoveTick := now
+; Desktop icons: own idle timer and own rename / menu hold. Never touches the cursor timer.
+RunIconHideLogic(now) {
+    global Desktop_Hide_Enabled, isManualPrimaryDimOn, areDesktopIconsHidden, lastDesktopIconActiveTick
+    deskIdleSec := GetDesktopIdleSec()
+    iconsOn := (Desktop_Hide_Enabled && !isManualPrimaryDimOn && deskIdleSec > 0)
+    if !iconsOn {
         if areDesktopIconsHidden {
             SetDesktopIconsTarget(true)
         }
-    } else if (iconIdleElapsed >= desktopIdleLimitMs) {
+        return
+    }
+    ; The rename / menu check pokes Explorer, so asking 2-3 times a second is plenty. Hiding the icons still does its own live check.
+    static holdTick := 0, holdCached := false
+    if (now - holdTick >= 400) {
+        holdTick := now
+        holdCached := IsDesktopHoldActive(now)
+    }
+    holdActive := holdCached
+    if holdActive {
+        lastDesktopIconActiveTick := now
+        if areDesktopIconsHidden {
+            SetDesktopIconsTarget(true)
+        }
+    } else if ((now - lastDesktopIconActiveTick) >= deskIdleSec * 1000) {
         if !areDesktopIconsHidden {
             SetDesktopIconsTarget(false)
         }
@@ -8203,7 +8498,8 @@ CheckIdleActivity() {
     now := A_TickCount
 
     ; Keep desktop icons hidden even if Explorer / WorkerW refreshes and resets their layered alpha
-    EnforceDesktopIconAlpha(now)
+        SafeRun(EnforceDesktopIconAlpha.Bind(now), "icon enforce")
+    SafeRun(ExtraOverlayFailsafe.Bind(now), "overlay failsafe")
 
     compRunningNow := IsCompGameRunning()
     if (compRunningNow && !wasCompGameRunning) {
@@ -8270,7 +8566,7 @@ CheckIdleActivity() {
 
     ; Cursor-hide timer: only a real mouse move (more than 2 px from where it last counted) or a click keeps the cursor on screen.
     ; Typing, controllers, sensor jitter and background programs that poke the idle timer no longer bring it back.
-    if (hasCursorPos && (Abs(curX - cursorAnchorX) > 2 || Abs(curY - cursorAnchorY) > 2)) {
+    if (hasCursorPos && (Abs(curX - cursorAnchorX) > 6 || Abs(curY - cursorAnchorY) > 6)) {
         cursorAnchorX := curX
         cursorAnchorY := curY
         if !spuriousMove {
@@ -8859,9 +9155,12 @@ SetDesktopIconsTarget(visible) {
         return
     }
 
-    areDesktopIconsHidden := !visible
+      areDesktopIconsHidden := !visible
+    if !visible {
+        try StartCursorWatchdog()
+    }
     SyncWakeHooks()
-    targetIconAlpha := visible ? 255 : 0
+    targetIconAlpha := visible ? IconVisibleAlpha() : 0
     lvHwnd := GetDesktopListViewHwnd()
     if !lvHwnd {
         currentIconAlpha := targetIconAlpha    ; keep state consistent; EnforceDesktopIconAlpha applies it once the list view exists
@@ -8908,42 +9207,106 @@ StepDesktopIconFade() {
 }
 
 ApplyDesktopListViewAlpha(lvHwnd, alpha) {
-    global targetIconAlpha
+    static lastHwnd := 0, lastAlpha := -1
     if IsWindowHung(lvHwnd) {
         return    ; Explorer is busy: try again on the next tick instead of freezing with it
     }
-
-    ; Never leave the list view layered: that is what causes the black background
+        alpha := Max(0, Min(255, Integer(alpha)))
     exStyle := DllCall("GetWindowLongPtr", "Ptr", lvHwnd, "Int", -20, "Ptr")
-    if (exStyle & 0x80000) {
-        DllCall("SetLayeredWindowAttributes", "Ptr", lvHwnd, "UInt", 0, "UChar", 255, "UInt", 0x2)
-        DllCall("SetWindowLongPtr", "Ptr", lvHwnd, "Int", -20, "Ptr", exStyle & ~0x80000)
+    ; Fully visible: drop the layered style completely. A colour-keyed layered window lets mouse clicks fall through its
+    ; empty background, which stopped clicks on empty desktop space from deselecting icons.
+    if (alpha >= 255) {
+        if (exStyle & 0x80000) {
+            DllCall("SetWindowLongPtr", "Ptr", lvHwnd, "Int", -20, "Ptr", exStyle & ~0x80000)
+            DllCall("RedrawWindow", "Ptr", lvHwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0585)
+        }
+        if !DllCall("IsWindowVisible", "Ptr", lvHwnd, "Int") {
+            DllCall("ShowWindow", "Ptr", lvHwnd, "Int", 8)
+            DllCall("RedrawWindow", "Ptr", lvHwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0585)
+        }
+        lastHwnd := lvHwnd
+        lastAlpha := alpha
+        return
     }
-
-    ; Direction comes from the target, so restoring shows the icons immediately
-    wantVisible := (targetIconAlpha > 0)
-    isVisible   := DllCall("IsWindowVisible", "Ptr", lvHwnd, "Int")
-    if (wantVisible && !isVisible) {
-        DllCall("ShowWindow", "Ptr", lvHwnd, "Int", 8)                                   ; SW_SHOWNA
+    needSet := false
+    if !(exStyle & 0x80000) {
+        DllCall("SetWindowLongPtr", "Ptr", lvHwnd, "Int", -20, "Ptr", exStyle | 0x80000)
+        needSet := true
+    }
+    ; Ask Windows what is REALLY applied instead of trusting a cached value (Explorer can reset it)
+    key := 0, a := 0, flags := 0
+    if DllCall("GetLayeredWindowAttributes", "Ptr", lvHwnd, "UInt*", &key, "UChar*", &a, "UInt*", &flags, "Int") {
+        if (a != alpha || key != 0 || (flags & 0x3) != 0x3) {
+            needSet := true
+        }
+    } else if (lvHwnd != lastHwnd || alpha != lastAlpha) {
+        needSet := true
+    }
+    if needSet {
+        ; Black is the colour key (0x3), so the list's empty background stays transparent and the wallpaper is never darkened.
+        DllCall("SetLayeredWindowAttributes", "Ptr", lvHwnd, "UInt", 0, "UChar", alpha, "UInt", 0x3)
+    }
+    isVisible := DllCall("IsWindowVisible", "Ptr", lvHwnd, "Int")
+    if (alpha <= 0) {
+        if isVisible {
+            DllCall("ShowWindow", "Ptr", lvHwnd, "Int", 0)
+        }
+    } else if !isVisible {
+        DllCall("ShowWindow", "Ptr", lvHwnd, "Int", 8)
         DllCall("RedrawWindow", "Ptr", lvHwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0585)
-    } else if (!wantVisible && isVisible) {
-        DllCall("ShowWindow", "Ptr", lvHwnd, "Int", 0)                                   ; SW_HIDE
     }
+    lastHwnd := lvHwnd
+    lastAlpha := alpha
 }
 
+; Icon opacity while VISIBLE (Opacity slider: 100% = normal, lower = see-through). Idle = fully hidden (alpha 0).
+IconVisibleAlpha() {
+    global Icon_Opacity_Pct, Desktop_Hide_Enabled
+    if (!IsSet(Desktop_Hide_Enabled) || !Desktop_Hide_Enabled) {
+        return 255    ; feature off: icons are always fully visible, the Opacity setting is ignored
+    }
+    pct := IsSet(Icon_Opacity_Pct) ? Icon_Opacity_Pct : 100
+    return Round(255 * Max(0, Min(100, pct)) / 100)
+}
+SetIconOpacityPct(pct) {
+    global Icon_Opacity_Pct, IniPath, areDesktopIconsHidden, currentIconAlpha, targetIconAlpha
+    Icon_Opacity_Pct := pct
+    try IniWrite(pct, IniPath, "General", "IconOpacity")
+    if !areDesktopIconsHidden {    ; live preview while icons are showing
+        targetIconAlpha := currentIconAlpha := IconVisibleAlpha()
+        if (lv := GetDesktopListViewHwnd())
+            ApplyDesktopListViewAlpha(lv, currentIconAlpha)
+    }
+}
 ; Re-applies the layered alpha while icons are hidden so Explorer / WorkerW refreshes can't reset visibility
-EnforceDesktopIconAlpha(now := 0) {
+EnforceDesktopIconAlpha(now := 0, force := false) {
     global areDesktopIconsHidden, currentIconAlpha, targetIconAlpha, lastIconEnforceTick, ICON_ENFORCE_MS
+    global lastIconAlphaMismatchTick, iconFadeTimerFn
     if (now = 0) {
         now := A_TickCount
     }
-    if (!areDesktopIconsHidden || (now - lastIconEnforceTick) < ICON_ENFORCE_MS) {
+    if !areDesktopIconsHidden {
+        lastIconAlphaMismatchTick := 0
+        return
+    }
+    if (!force && (now - lastIconEnforceTick) < ICON_ENFORCE_MS) {
         return
     }
     lastIconEnforceTick := now
     if (currentIconAlpha != targetIconAlpha) {
-        return    ; fade still running
+        ; fade still running. [hide-fix-5] If it has been "running" for over 1 s the fade timer was lost: snap to the target
+        ; instead of skipping the enforcement forever.
+        if (lastIconAlphaMismatchTick = 0) {
+            lastIconAlphaMismatchTick := now
+            return
+        }
+        if ((now - lastIconAlphaMismatchTick) < Max(1000, Icon_Fade_Ms + 500)) {
+            return
+        }
+        SetTimer(iconFadeTimerFn, 0)
+        currentIconAlpha := targetIconAlpha
     }
+    lastIconAlphaMismatchTick := 0
     lvHwnd := GetDesktopListViewHwnd()
     if lvHwnd {
         ApplyDesktopListViewAlpha(lvHwnd, currentIconAlpha)
@@ -8951,6 +9314,7 @@ EnforceDesktopIconAlpha(now := 0) {
 }
 
 GetDesktopListViewHwnd() {
+    global desktopLvHwndCache
     hProgman := DllCall("FindWindow", "Str", "Progman", "Ptr", 0, "Ptr")
     hShell   := DllCall("FindWindowEx", "Ptr", hProgman, "Ptr", 0, "Str", "SHELLDLL_DefView", "Ptr", 0, "Ptr")
     if !hShell {
@@ -8966,7 +9330,50 @@ GetDesktopListViewHwnd() {
             }
         }
     }
-    return hShell ? DllCall("FindWindowEx", "Ptr", hShell, "Ptr", 0, "Str", "SysListView32", "Ptr", 0, "Ptr") : 0
+    lv := hShell ? DllCall("FindWindowEx", "Ptr", hShell, "Ptr", 0, "Str", "SysListView32", "Ptr", 0, "Ptr") : 0
+    desktopLvHwndCache := lv
+    return lv
+}
+
+; [hide-fix-5] Windows tells us the instant ANY window is shown. If it is the desktop icon list and the icons are supposed to be
+; hidden, hide them again at once (the 100 ms poll alone left a visible gap whenever Explorer re-showed them).
+StartDesktopIconWinEventHook() {
+    global iconWinEventHook, iconWinEventCb
+    if iconWinEventHook {
+        return
+    }
+    iconWinEventCb := CallbackCreate(DesktopIconWinEventProc, , 7)
+    ; EVENT_OBJECT_SHOW (0x8002), out-of-context, skip events from this process (0x2)
+    iconWinEventHook := DllCall("SetWinEventHook", "UInt", 0x8002, "UInt", 0x8002, "Ptr", 0, "Ptr", iconWinEventCb
+        , "UInt", 0, "UInt", 0, "UInt", 0x2, "Ptr")
+}
+
+DesktopIconWinEventProc(hHook, event, hwnd, idObject, idChild, idThread, eventTime) {
+    global areDesktopIconsHidden, desktopLvHwndCache
+    if (!areDesktopIconsHidden || idObject != 0 || !hwnd) {
+        return
+    }
+    if (hwnd != desktopLvHwndCache) {
+        buf := Buffer(64, 0)
+        DllCall("GetClassNameW", "Ptr", hwnd, "Ptr", buf.Ptr, "Int", 32)
+        if (StrGet(buf, "UTF-16") != "SysListView32") {
+            return
+        }
+        hParent := DllCall("GetParent", "Ptr", hwnd, "Ptr")
+        if !hParent {
+            return
+        }
+        DllCall("GetClassNameW", "Ptr", hParent, "Ptr", buf.Ptr, "Int", 32)
+        if (StrGet(buf, "UTF-16") != "SHELLDLL_DefView") {
+            return
+        }
+    }
+    SetTimer(ReassertIconsNow, -1)
+}
+
+ReassertIconsNow() {
+    DebugLogEvent("Desktop icons: Explorer showed the icon list again - hiding it again")
+    EnforceDesktopIconAlpha(0, true)
 }
 
 ; ==============================================================================
@@ -9096,6 +9503,26 @@ ApplyExtraDimmerScaledAlphas(elapsedMs, fallbackDurationMs := 1) {
     }
 }
 
+; Failsafe: nothing wants a secondary dimmed for 3 s but overlays are still up -> remove them
+ExtraOverlayFailsafe(now) {
+    global isAutoExtraDimmed, isManualExtraDimOn, manualExtraMonSet, isTestingExtraDim, ExtraDimmerGuis, currentExtraAlpha
+    static since := 0
+    if (isAutoExtraDimmed || isManualExtraDimOn || manualExtraMonSet.Count > 0 || isTestingExtraDim
+        || (ExtraDimmerGuis.Length = 0 && currentExtraAlpha = 0)) {
+        since := 0
+        return
+    }
+    if (since = 0) {
+        since := now
+        return
+    }
+    if ((now - since) > 3000) {
+        since := 0
+        DebugLogEvent("Failsafe: secondary overlays were left on screen with nothing dimmed - removing")
+        StartExtraFade(0, 0)
+    }
+}
+
 EnsureExtraDimmerGuis(previewMonIdx := 0) {
     global ExtraDimmerGuis, manualExtraMonSet, extraMonDimmedSet, isManualExtraDimOn, isAutoExtraDimmed
 
@@ -9168,8 +9595,9 @@ SetCursorIdleHidden(hidden) {
     if (isCursorIdleHidden = hidden) {
         return
     }
-    isCursorIdleHidden := hidden
+        isCursorIdleHidden := hidden
     DebugLogEvent("Idle cursor " (hidden ? "hidden" : "shown"))
+    try DebugLogEvent("TRACE idle cursor " (hidden ? "hidden" : "shown") " by: " StrReplace(SubStr(Error("").Stack, 1, 700), "`n", " <- "))
     UpdateCursorVisibility()
 }
 
@@ -9202,31 +9630,78 @@ UpdateCursorVisibility() {
     }
 }
 
+; One list for hide + guard, so they always agree. 32652 / 32653 (pin / person) added.
+BlankCursorIds() {
+    static ids := [32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32650, 32651, 32652, 32653]
+    return ids
+}
+
+; Separate hidden process that restores the cursors the moment this app exits for ANY reason (crash, Task Manager kill)
+; Separate hidden process that, when this app exits for ANY reason (crash, Task Manager kill), restores the cursors and the desktop icons
+StartCursorWatchdog() {
+    static started := false
+    if started
+        return
+    started := true
+    code := "
+    (
+param([int]$p)
+Wait-Process -Id $p -ErrorAction SilentlyContinue
+Add-Type -Namespace W -Name U -MemberDefinition '
+[DllImport("user32.dll")] public static extern bool SystemParametersInfo(uint a, uint b, IntPtr c, uint d);
+[DllImport("user32.dll")] public static extern IntPtr FindWindow(string c, string t);
+[DllImport("user32.dll")] public static extern IntPtr FindWindowEx(IntPtr p, IntPtr a, string c, string t);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+[DllImport("user32.dll")] public static extern bool SetLayeredWindowAttributes(IntPtr h, uint k, byte a, uint f);
+'
+[W.U]::SystemParametersInfo(0x57, 0, [IntPtr]::Zero, 0) | Out-Null
+$z = [IntPtr]::Zero
+$dv = [W.U]::FindWindowEx([W.U]::FindWindow('Progman', $null), $z, 'SHELLDLL_DefView', $null)
+$w = $z
+while ($dv -eq $z) {
+  $w = [W.U]::FindWindowEx($z, $w, 'WorkerW', $null)
+  if ($w -eq $z) { break }
+  $dv = [W.U]::FindWindowEx($w, $z, 'SHELLDLL_DefView', $null)
+}
+if ($dv -ne $z) {
+  $lv = [W.U]::FindWindowEx($dv, $z, 'SysListView32', $null)
+  if ($lv -ne $z) {
+    [W.U]::SetLayeredWindowAttributes($lv, 0, 255, 3) | Out-Null
+    [W.U]::ShowWindow($lv, 8) | Out-Null
+  }
+}
+    )"
+    ps1 := A_Temp "\OLEDEngine_Restore.ps1"
+    try FileDelete(ps1)
+    FileAppend(code, ps1, "UTF-8")
+    Run('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' ps1 '" ' DllCall("GetCurrentProcessId"), , "Hide")
+}
 HideSystemCursors(force := false) {
     global areCursorsHidden, blankCursorHandles
+    Critical    ; [hide-fix-5] the guard timer must not interrupt a half-finished hide
+    Critical
+    try StartCursorWatchdog()
     if (areCursorsHidden && !force) {
         return
     }
-    ; 32651 (help) was missing from the old list
-    static cursorIds := [32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32650, 32651]
     andMask := Buffer(128, 0xFF)
     xorMask := Buffer(128, 0x00)
-    for id in cursorIds {
+    handles := Map()
+    for id in BlankCursorIds() {
         hBlank := DllCall("CreateCursor", "Ptr", 0, "Int", 0, "Int", 0, "Int", 32, "Int", 32, "Ptr", andMask.Ptr, "Ptr", xorMask.Ptr, "Ptr")
-        if hBlank {
-            DllCall("SetSystemCursor", "Ptr", hBlank, "UInt", id)
+        if !hBlank {
+            continue
+        }
+        if DllCall("SetSystemCursor", "Ptr", hBlank, "UInt", id, "Int") {
+            handles[id] := DllCall("LoadCursor", "Ptr", 0, "Ptr", id, "Ptr")    ; [hide-fix-5] track EVERY blanked cursor
+        } else {
+            DllCall("DestroyCursor", "Ptr", hBlank)    ; id not supported on this Windows: do not leak the handle
         }
     }
-    ; [hide-fix-4] Remember the handles Windows reports for these cursors right now. CursorHideGuard compares against them
-    ; (no pixel reading), so a restore by something else is noticed even if the blank cursor is stored in another format.
-    blankCursorHandles := Map()
-    for id in [32512, 32513, 32649] {
-        blankCursorHandles[id] := DllCall("LoadCursor", "Ptr", 0, "Ptr", id, "Ptr")
-    }
+    blankCursorHandles := handles
     areCursorsHidden := true
-    SetTimer(CursorHideGuard, 250)
+    SetTimer(CursorHideGuard, 100)    ; [hide-fix-5] was 250
 }
-
 ; True while the given system cursor is still our blank one (a monochrome cursor with an all-transparent mask)
 IsSystemCursorBlank(id) {
     hCur := DllCall("LoadCursor", "Ptr", 0, "Ptr", id, "Ptr")
@@ -9269,38 +9744,63 @@ IsSystemCursorBlank(id) {
 ; While the cursor should be hidden this checks (cheaply) that the blank ones are still in place and re-applies them ONLY if they are not,
 ; so there is no constant re-applying that could itself flicker.
 CursorHideGuard() {
-    global areCursorsHidden, blankCursorHandles, eyedropperCursorActive, cursorGuardReapplyCount
-    static strikes := 0, lastForce := 0
+        global areCursorsHidden, blankCursorHandles, eyedropperCursorActive, cursorGuardReapplyCount
+    global isCursorIdleHidden, isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed, isTestingPrimaryDim
+    static recent := []
+    Critical
     if !areCursorsHidden {
         SetTimer(CursorHideGuard, 0)
-        strikes := 0
+        recent := []
+        return
+    }
+    ; Failsafe: cursors are blank but nothing wants them hidden -> give them back
+    if (!isCursorIdleHidden && !isManualBlackoutOn && !isManualPrimaryDimOn && !isAutoPrimaryDimmed && !isTestingPrimaryDim) {
+        RestoreSystemCursors()
         return
     }
     if eyedropperCursorActive {
-        return    ; the eyedropper owns the cursors for a moment: do not fight it
+        return
     }
-    ; [hide-fix-4] Handle check instead of the old pixel check: if any of the cursors we blanked now has a different handle,
-    ; something else (theme change, another program, SPI_SETCURSORS) replaced it.
+    ; [hide-fix-5] checks every cursor we blanked, not just 3
     intact := true
     for id, h in blankCursorHandles {
-        if (DllCall("LoadCursor", "Ptr", 0, "Ptr", id, "Ptr") != h) {
+        if (DllCall("LoadCursor", "Ptr", 0, "Ptr", id, "Ptr") != h && !IsSystemCursorBlank(id)) {
             intact := false
             break
         }
     }
     if intact {
-        strikes := 0
         return
     }
-    ; Three quick tries, then at most one try every 10 s (re-applying over and over could itself flicker)
-    if (strikes >= 3 && (A_TickCount - lastForce) < 10000) {
+    ; [hide-fix-5] Loop protection only: if we already re-applied 8 times in 5 s, allow 1 per second.
+    ; (The old 10 s back-off left the cursor visible for 10 s.)
+    now := A_TickCount
+    while (recent.Length && (now - recent[1]) > 5000) {
+        recent.RemoveAt(1)
+    }
+    if (recent.Length >= 8 && (now - recent[recent.Length]) < 1000) {
         return
     }
-    strikes += 1
-    lastForce := A_TickCount
+    recent.Push(now)
     cursorGuardReapplyCount += 1
-    DebugLogEvent("Cursor guard: the blank cursors were replaced by something else - hiding them again (try " strikes ")")
+    DebugLogEvent("Cursor guard: blank cursors were replaced by something else - hiding them again (" recent.Length " in last 5 s)")
     HideSystemCursors(true)
+}
+
+; [hide-fix-5] Another program called SPI_SETCURSORS (or the theme changed): re-blank right away instead of waiting for a poll
+OnSettingChangeMsg(wParam, lParam, msg, hwnd) {
+    global areCursorsHidden
+    if !areCursorsHidden {
+        return
+    }
+    if (msg = 0x001A && wParam != 0x57) {    ; WM_SETTINGCHANGE: only SPI_SETCURSORS matters
+        return
+    }
+    SetTimer(ReblankCursorsSoon, -10)
+}
+
+ReblankCursorsSoon() {
+    CursorHideGuard()
 }
 
 RestoreSystemCursors() {
@@ -9309,7 +9809,6 @@ RestoreSystemCursors() {
     DllCall("SystemParametersInfo", "UInt", 0x0057, "UInt", 0, "Ptr", 0, "UInt", 0)
     areCursorsHidden := false
 }
-
 IsPointOnPrimaryMonitor(x, y) {
     primaryIdx := MonitorGetPrimary()
     MonitorGet(primaryIdx, &mLeft, &mTop, &mRight, &mBottom)
@@ -10221,6 +10720,7 @@ PresetToIniText(p) {
 
 PresetsToIniText(list, withExtras := true) {
     global Taskbar_AutoHide_Enabled, LongIdle_Off_Enabled, LongIdle_Off_Min, LongIdle_Off_Monitors, Run_As_Admin
+    global Browser_Dim_Enabled, Browser_Dim_Percent, Browser_Dim_Delay_Sec, Browser_Dim_VideoOnly, Browser_Dim_FallbackH
     out := ""
     if withExtras {
         out .= "[Extras]`n"
@@ -10229,6 +10729,11 @@ PresetsToIniText(list, withExtras := true) {
         out .= "LongIdleMin=" LongIdle_Off_Min "`n"
         out .= "LongIdleMonitors=" LongIdle_Off_Monitors "`n"
         out .= "RunAsAdmin=" (Run_As_Admin ? 1 : 0) "`n"
+        out .= "BrowserDim=" (Browser_Dim_Enabled ? 1 : 0) "`n"
+        out .= "BrowserDimPct=" Browser_Dim_Percent "`n"
+        out .= "BrowserDimDelay=" Browser_Dim_Delay_Sec "`n"
+        out .= "BrowserDimVideoOnly=" (Browser_Dim_VideoOnly ? 1 : 0) "`n"
+        out .= "BrowserDimFallbackH=" Browser_Dim_FallbackH "`n"
     }
     for p in list {
         out .= PresetToIniText(p)
@@ -10238,6 +10743,7 @@ PresetsToIniText(list, withExtras := true) {
 
 LoadPresetsFromIni() {
     global Presets, PresetsIniPath, Taskbar_AutoHide_Enabled, LongIdle_Off_Enabled, LongIdle_Off_Min, LongIdle_Off_Monitors, Run_As_Admin
+    global Browser_Dim_Enabled, Browser_Dim_Percent, Browser_Dim_Delay_Sec, Browser_Dim_VideoOnly, Browser_Dim_FallbackH
     Presets := []
     ; Main file first; if it is unreadable or damaged, fall back to the backup of the previous save
     for srcPath in [PresetsIniPath, PresetsIniPath ".bak"] {
@@ -10272,6 +10778,21 @@ LoadPresetsFromIni() {
         }
         if extras.Has("RunAsAdmin") {
             Run_As_Admin := (extras["RunAsAdmin"] = "1")
+        }
+                if extras.Has("BrowserDim") {
+            Browser_Dim_Enabled := (extras["BrowserDim"] = "1")
+        }
+        if extras.Has("BrowserDimPct") {
+            Browser_Dim_Percent := PresetInt(extras["BrowserDimPct"], 100)
+        }
+        if extras.Has("BrowserDimDelay") {
+            Browser_Dim_Delay_Sec := Max(1, PresetInt(extras["BrowserDimDelay"], 3600))
+        }
+        if extras.Has("BrowserDimVideoOnly") {
+            Browser_Dim_VideoOnly := (extras["BrowserDimVideoOnly"] = "1")
+        }
+        if extras.Has("BrowserDimFallbackH") {
+            Browser_Dim_FallbackH := Max(20, PresetInt(extras["BrowserDimFallbackH"], 400))
         }
         for i, p in list {
             if (Presets.Length >= PresetMax()) {
@@ -11070,14 +11591,15 @@ Hotkey("^!r", (*) => (DebugLogEvent("Dev reload hotkey triggered (Ctrl+Alt+R)"),
 ; 16. HIDE DIAGNOSTICS (Ctrl+Alt+H) - shows exactly why the cursor / desktop icons are or are not hiding, and copies it to the clipboard
 ; ==============================================================================
 Hotkey("^!h", (*) => ShowHideDiagnostics())
+Hotkey("^!c", (*) => (SetCursorIdleHidden(false), RestoreSystemCursors()))   ; Ctrl+Alt+C = emergency cursor restore
 
 ShowHideDiagnostics() {
-    global Desktop_Hide_Enabled, isSessionLocked, isAutomationPaused, isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed
+    global Desktop_Hide_Enabled, isAutomationPaused, isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed
     global isCursorIdleHidden, areCursorsHidden, areDesktopIconsHidden, lastCursorMoveTick, lastDesktopIconActiveTick
     global Presets, presetPinned
     now := A_TickCount
     out := "Build: " BUILD_ID "`n"
-    out .= "Hide cursor & icons enabled: " (Desktop_Hide_Enabled ? "yes" : "NO") "`n"
+   out .= "Fade icons: " (Desktop_Hide_Enabled ? "yes" : "NO") " | Hide cursor: " (Cursor_Hide_Enabled ? "yes" : "NO") "`n"
     try out .= "Idle seconds to hide: " GetDesktopIdleSec() "`n"
     out .= "Session marked locked: " (isSessionLocked ? "YES (blocks everything)" : "no") "`n"
     out .= "Automation paused: " (isAutomationPaused ? "YES" : "no") "`n"
@@ -11106,4 +11628,721 @@ ShowHideDiagnostics() {
     A_Clipboard := out
     DebugLogEvent("Hide diagnostics: " StrReplace(out, "`n", " | "))
     MsgBox(out "`n(copied to the clipboard)", "OLED Engine - hide diagnostics", "Iconi")
+}
+; ==============================================================================
+; 17. BROWSER TABS & TOOLBAR DIMMER
+; One click-through black overlay per browser window, kept directly above that window in the Z-order (so anything
+; covering the browser also covers the overlay). No window ownership and no hooks: one timer does everything.
+; Only the strip above the web page is covered.
+; ==============================================================================
+BrowserChromeApplySettings() {
+    global Browser_Dim_Enabled, BrowserScanTick, BrowserPreviewUntil
+    BrowserScanTick := 0
+    if (Browser_Dim_Enabled || A_TickCount < BrowserPreviewUntil) {
+        SetTimer(BrowserChromeTick, 50)
+    } else {
+        SetTimer(BrowserChromeTick, 0)
+        BrowserChromeClear()
+    }
+}
+
+BrowserChromeIsBrowserExe(exe) {
+    global Browser_Processes
+    static known := ["chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe"
+        , "chromium.exe", "thorium.exe", "arc.exe", "browser.exe", "whale.exe", "slimjet.exe", "maxthon.exe"
+        , "iridium.exe", "catsxp.exe", "comet.exe", "dia.exe", "librewolf.exe", "waterfox.exe", "floorp.exe"
+        , "zen.exe", "mullvadbrowser.exe", "palemoon.exe", "basilisk.exe", "seamonkey.exe"]
+    for list in [Browser_Processes, known] {
+        for p in list {
+            if (p = exe) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+BrowserChromeClass(hwnd) {
+    buf := Buffer(512, 0)
+    DllCall("GetClassNameW", "Ptr", hwnd, "Ptr", buf, "Int", 256)
+    return StrGet(buf, "UTF-16")
+}
+
+; True only for real browser windows (menus, tooltips, suggestion lists and picture-in-picture are skipped)
+BrowserChromeIsMainWindow(hwnd) {
+    if (!DllCall("IsWindowVisible", "Ptr", hwnd, "Int") || DllCall("IsIconic", "Ptr", hwnd, "Int")) {
+        return false
+    }
+    if DllCall("GetWindow", "Ptr", hwnd, "UInt", 4, "Ptr") {                 ; owned window = popup / dialog
+        return false
+    }
+    style := DllCall("GetWindowLongPtr", "Ptr", hwnd, "Int", -16, "Ptr")
+    exStyle := DllCall("GetWindowLongPtr", "Ptr", hwnd, "Int", -20, "Ptr")
+    if (!(style & 0x20000) || (exStyle & 0x080000A0)) {                      ; needs a minimize box; no tool / no-activate / click-through
+        return false
+    }
+    cls := BrowserChromeClass(hwnd)
+    if (InStr(cls, "Chrome_WidgetWin") != 1 && cls != "MozillaWindowClass") {
+        return false
+    }
+    cloaked := 0
+    DllCall("dwmapi\DwmGetWindowAttribute", "Ptr", hwnd, "UInt", 14, "UInt*", &cloaked, "UInt", 4)
+    if (cloaked || DllCall("GetWindowTextLengthW", "Ptr", hwnd, "Int") = 0 || !BrowserChromeIsBrowserExe(WinGetProcessName(hwnd))) {
+        return false
+    }
+    WinGetPos(, , &w, &h, hwnd)
+    return (w >= 400 && h >= 250)
+}
+
+; Adds overlays for new browser windows and removes those of closed / minimized ones
+BrowserChromeScan() {
+    global BrowserOverlays
+    found := Map()
+    for hwnd in WinGetList() {
+        try {
+            if BrowserChromeIsMainWindow(hwnd) {
+                found[hwnd] := true
+            }
+        }
+    }
+    gone := []
+    for hwnd, e in BrowserOverlays {
+        if !found.Has(hwnd) {
+            gone.Push(hwnd)
+        }
+    }
+    for hwnd in gone {
+        try BrowserOverlays[hwnd].ov.Destroy()
+        BrowserOverlays.Delete(hwnd)
+    }
+    for hwnd, _ in found {
+        try {
+            if !BrowserOverlays.Has(hwnd) {
+                BrowserOverlays[hwnd] := BrowserChromeCreate(hwnd)
+            }
+            BrowserOverlays[hwnd].mon := GetWindowMonitorIndex(hwnd)
+        } catch as err {
+            DebugLogEvent("Browser dimmer: could not create an overlay - " err.Message, "WARN")
+        }
+    }
+}
+
+BrowserChromeCreate(hwnd) {
+    oldCtx := DllCall("SetThreadDpiAwarenessContext", "Ptr", -4, "Ptr")
+    try {
+        ov := Gui("-Caption +ToolWindow -DPIScale +E0x20 +E0x80000 +E0x08000000")
+        ov.BackColor := "000000"
+        DllCall("SetLayeredWindowAttributes", "Ptr", ov.Hwnd, "UInt", 0, "UChar", 0, "UInt", 2)
+        DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", ov.Hwnd, "UInt", 3, "Int*", 1, "UInt", 4)    ; no show / hide animation
+    } finally {
+        if oldCtx {
+            DllCall("SetThreadDpiAwarenessContext", "Ptr", oldCtx, "Ptr")
+        }
+    }
+    return { hwnd: hwnd, ov: ov, alpha: 0, shownAlpha: -1, shown: false, typing: false, mon: 0, off: -1
+        , x: 0, y: 0, w: 0, h: 0, gx: 0, gy: 0, gw: 0, gh: 0, last: A_TickCount
+        , sizeKey: "", measTick: 0, popTick: 0, pop: false }
+}
+
+BrowserChromeClear() {
+    global BrowserOverlays
+    for hwnd, e in BrowserOverlays {
+        try e.ov.Destroy()
+    }
+    BrowserOverlays := Map()
+}
+
+; Works out the strip above the web page (physical pixels). False = nothing to cover (minimized, fullscreen...).
+BrowserChromeRect(e) {
+    global Browser_Dim_FallbackH, BrowserPreviewUntil, BrowserPreviewH
+    hwnd := e.hwnd
+    if (!DllCall("IsWindowVisible", "Ptr", hwnd, "Int") || DllCall("IsIconic", "Ptr", hwnd, "Int")) {
+        return false
+    }
+    cloaked := 0
+    DllCall("dwmapi\DwmGetWindowAttribute", "Ptr", hwnd, "UInt", 14, "UInt*", &cloaked, "UInt", 4)
+    if cloaked {
+        return false
+    }
+    rcWin := Buffer(16, 0)
+    if !DllCall("GetWindowRect", "Ptr", hwnd, "Ptr", rcWin, "Int") {
+        return false
+    }
+    monInfo := Buffer(40, 0)
+    NumPut("UInt", 40, monInfo)
+    hMon := DllCall("MonitorFromWindow", "Ptr", hwnd, "UInt", 2, "Ptr")
+    if !DllCall("GetMonitorInfoW", "Ptr", hMon, "Ptr", monInfo, "Int") {
+        return false
+    }
+    ; Fullscreen = the window is exactly the size of its monitor
+    isFull := true
+    Loop 4 {
+        if (Abs(NumGet(rcWin, (A_Index - 1) * 4, "Int") - NumGet(monInfo, A_Index * 4, "Int")) > 1) {
+            isFull := false
+        }
+    }
+    if isFull {
+        return false
+    }
+    ; Visible frame (without the invisible resize borders)
+    rcVis := Buffer(16, 0)
+    if (DllCall("dwmapi\DwmGetWindowAttribute", "Ptr", hwnd, "UInt", 9, "Ptr", rcVis, "UInt", 16, "Int") != 0) {
+        rcVis := rcWin
+    }
+    L := NumGet(rcVis, 0, "Int")
+    T := NumGet(rcVis, 4, "Int")
+    R := NumGet(rcVis, 8, "Int")
+    B := NumGet(rcVis, 12, "Int")
+    if DllCall("IsZoomed", "Ptr", hwnd, "Int") {        ; maximized: never spill onto a neighbouring monitor
+        L := Max(L, NumGet(monInfo, 20, "Int"))
+        T := Max(T, NumGet(monInfo, 24, "Int"))
+        R := Min(R, NumGet(monInfo, 28, "Int"))
+        B := Min(B, NumGet(monInfo, 32, "Int"))
+    }
+    dpi := DllCall("GetDpiForWindow", "Ptr", hwnd, "UInt")
+    scale := (dpi ? dpi : 96) / 96
+
+    ; Chromium browsers: measure where the web page starts
+       off := -1
+    sizeKey := (R - L) "x" (B - T)
+    if (e.off >= 0 && e.sizeKey = sizeKey && (A_TickCount - e.measTick) < 750) {
+        off := e.off        ; measured a moment ago and the window size is the same - skip the child-window scan
+    } else if (InStr(BrowserChromeClass(hwnd), "Chrome_WidgetWin") = 1) {
+        e.sizeKey := sizeKey
+        e.measTick := A_TickCount
+        maxOff := Min(Round(260 * scale), (B - T) // 2)
+        bestArea := 0
+        rcChild := Buffer(16, 0)
+        try {
+            for child in WinGetControlsHwnd(hwnd) {
+                if (!DllCall("IsWindowVisible", "Ptr", child, "Int") || BrowserChromeClass(child) != "Chrome_RenderWidgetHostHWND") {
+                    continue
+                }
+                if !DllCall("GetWindowRect", "Ptr", child, "Ptr", rcChild, "Int") {
+                    continue
+                }
+                top := NumGet(rcChild, 4, "Int")
+                area := (NumGet(rcChild, 8, "Int") - NumGet(rcChild, 0, "Int")) * (NumGet(rcChild, 12, "Int") - top)
+                if (area > bestArea && top - T >= 0 && top - T <= maxOff) {
+                    bestArea := area
+                    off := top - T
+                }
+            }
+        }
+        if (off >= 0) {
+            e.off := off
+        } else {
+            off := e.off        ; last good measurement
+        }
+    }
+    ; Firefox family, or nothing measurable yet: use the fallback height
+    if (off < 0) {
+        fallback := (A_TickCount < BrowserPreviewUntil) ? BrowserPreviewH : Browser_Dim_FallbackH
+        off := Round(fallback * scale)
+    }
+    e.x := L
+    e.y := T
+    e.w := R - L
+    e.h := Min(off, B - T)
+    return (e.h >= 6 && e.w >= 100)
+}
+
+; Shows / hides / moves one overlay and keeps it owned directly above its browser window
+BrowserChromePlace(e) {
+    ovHwnd := e.ov.Hwnd
+    if (e.alpha <= 0) {
+        if e.shown {
+            DllCall("ShowWindow", "Ptr", ovHwnd, "Int", 0)
+            e.shown := false
+        }
+        return
+    }
+    ; Owning ovHwnd to e.hwnd guarantees Windows never puts the browser in front of its own overlay on click
+    if (DllCall("GetWindowLongPtr", "Ptr", ovHwnd, "Int", -8, "Ptr") != e.hwnd) {
+        DllCall("SetWindowLongPtr", "Ptr", ovHwnd, "Int", -8, "Ptr", e.hwnd, "Ptr")
+        e.shown := false
+    }
+    if (e.alpha != e.shownAlpha) {
+        DllCall("SetLayeredWindowAttributes", "Ptr", ovHwnd, "UInt", 0, "UChar", e.alpha, "UInt", 2)
+        e.shownAlpha := e.alpha
+    }
+    prev := DllCall("GetWindow", "Ptr", e.hwnd, "UInt", 3, "Ptr")        ; the window right above the browser
+    changed := (!e.shown || e.gx != e.x || e.gy != e.y || e.gw != e.w || e.gh != e.h)
+    if (!changed && prev = ovHwnd) {
+        return
+    }
+    flags := 0x0050        ; SWP_NOACTIVATE | SWP_SHOWWINDOW
+    after := 0
+    if (prev = ovHwnd) {
+        flags |= 0x0004    ; SWP_NOZORDER
+    } else if prev {
+        after := prev
+    } else if (DllCall("GetWindowLongPtr", "Ptr", e.hwnd, "Int", -20, "Ptr") & 0x8) {
+        after := -1        ; HWND_TOPMOST if browser itself is AlwaysOnTop
+    }
+    DllCall("SetWindowPos", "Ptr", ovHwnd, "Ptr", after, "Int", e.x, "Int", e.y, "Int", e.w, "Int", e.h, "UInt", flags)
+    e.shown := true
+    e.gx := e.x
+    e.gy := e.y
+    e.gw := e.w
+    e.gh := e.h
+}
+
+; True while a browser menu, address-bar dropdown, bookmark folder, or extension popup is open
+BrowserHasToolbarPopup(hwnd, e) {
+    global BrowserOverlays
+    rc := Buffer(16, 0)
+    cls := Buffer(128, 0)
+    maxPopupTop := e.y + e.h + 80
+    for pop in WinGetList() {
+        if (pop = hwnd) {
+            continue
+        }
+        ; Skip our own dim overlays (BrowserOverlays is keyed by browser hwnd, not overlay hwnd)
+        isOwnOverlay := false
+        for _, entry in BrowserOverlays {
+            if (entry.ov.Hwnd = pop) {
+                isOwnOverlay := true
+                break
+            }
+        }
+        if isOwnOverlay {
+            continue
+        }
+        if !DllCall("IsWindowVisible", "Ptr", pop, "Int") {
+            continue
+        }
+        owner := DllCall("GetWindow", "Ptr", pop, "UInt", 4, "Ptr")
+        rootOwner := DllCall("GetAncestor", "Ptr", pop, "UInt", 3, "Ptr")
+        if (owner != hwnd && rootOwner != hwnd) {
+            continue
+        }
+        n := DllCall("GetClassNameW", "Ptr", pop, "Ptr", cls, "Int", 64, "Int")
+        cName := n ? StrGet(cls, n, "UTF-16") : ""
+        if (cName = "tooltips_class32") {        ; ignore webpage hover tooltips
+            continue
+        }
+        if !DllCall("GetWindowRect", "Ptr", pop, "Ptr", rc, "Int") {
+            continue
+        }
+        popTop := NumGet(rc, 4, "Int")
+        w := NumGet(rc, 8, "Int") - NumGet(rc, 0, "Int")
+        h := NumGet(rc, 12, "Int") - popTop
+        ; Must be large enough to be a real menu/dropdown (not a link status bubble) and near the top toolbar
+        if (w < 80 || h < 32 || popTop > maxPopupTop) {
+            continue
+        }
+        try {
+            titleBuf := Buffer(128, 0)
+            DllCall("GetWindowTextW", "Ptr", pop, "Ptr", titleBuf, "Int", 63)
+            title := StrGet(titleBuf, "UTF-16")
+            if InStr(title, "Picture in picture") || InStr(title, "Picture-in-picture") {
+                continue
+            }
+        }
+        return true
+    }
+    return false
+}
+; Keyboard shortcuts that use the tabs / address bar / find bar. isTyping = stays awake while typing.
+BrowserChromeKeys(&isTyping) {
+    isTyping := false
+    if (GetKeyState("F6", "P") || (GetKeyState("Alt", "P") && GetKeyState("d", "P"))) {
+        isTyping := true
+        return true
+    }
+    if GetKeyState("Ctrl", "P") {
+        for k in ["l", "t", "k", "e", "n", "f"] {
+            if GetKeyState(k, "P") {
+                isTyping := true
+                return true
+            }
+        }
+        for k in ["w", "Tab", "PgUp", "PgDn", "1", "2", "3", "4", "5", "6", "7", "8", "9"] {
+            if GetKeyState(k, "P") {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+; Checks via UI Automation if the address bar, search box, or find bar inside the toolbar strip has keyboard focus
+; Returns 1 = focused in strip, 0 = focused elsewhere, -1 = UIA unavailable (use fallback state)
+BrowserIsAddressBarFocused(e) {
+    global Browser_Dim_UseUIA
+    static uia := 0, uiaFailed := false, lastCheck := 0, lastHwnd := 0, lastRes := -1
+    if !Browser_Dim_UseUIA {
+        return -1        ; UI Automation is off: BrowserChromeTick falls back to its key / click checks
+    }
+    now := A_TickCount
+    if (e.hwnd = lastHwnd && (now - lastCheck) < 120) {
+        return lastRes
+    }
+    lastHwnd := e.hwnd
+    lastCheck := now
+    if uiaFailed {
+        lastRes := -1
+        return -1
+    }
+    if !uia {
+        try {
+            uia := ComObject("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+        } catch {
+            uiaFailed := true
+            lastRes := -1
+            return -1
+        }
+    }
+    el := 0
+    try {
+        if (ComCall(8, uia, "Ptr*", &el) != 0 || !el) {        ; IUIAutomation::GetFocusedElement
+            lastRes := -1
+            return -1
+        }
+        ctrlType := 0
+        ComCall(21, el, "Int*", &ctrlType)                      ; get_CurrentControlType (50004=Edit, 50003=ComboBox)
+        if (ctrlType != 50004 && ctrlType != 50003) {
+            lastRes := 0
+            return 0
+        }
+        rc := Buffer(16, 0)
+        if (ComCall(43, el, "Ptr", rc) != 0) {                  ; get_CurrentBoundingRectangle
+            lastRes := -1
+            return -1
+        }
+        l := NumGet(rc, 0, "Int")
+        t := NumGet(rc, 4, "Int")
+        r := NumGet(rc, 8, "Int")
+        b := NumGet(rc, 12, "Int")
+        if (r <= l || b <= t) {
+            lastRes := -1
+            return -1
+        }
+        midX := (l + r) // 2
+        midY := (t + b) // 2
+        lastRes := (midX >= e.x && midX < e.x + e.w && midY >= e.y && midY < e.y + e.h) ? 1 : 0
+        return lastRes
+    } catch {
+        lastRes := -1
+        return -1
+    } finally {
+        if el {
+            ObjRelease(el)
+        }
+    }
+}
+
+; The only timer of this feature: finds windows, handles hover / keys / focus / open menus, fades and positions overlays
+BrowserChromeTick() {
+    global BrowserOverlays, BrowserScanTick, BrowserPreviewUntil, BrowserPreviewPct, BrowserPreviewFadeMs
+    global Browser_Dim_Enabled, Browser_Dim_Percent, Browser_Dim_Delay_Sec, Browser_Dim_VideoOnly, Browser_Dim_Fade_Ms
+    global isSessionLocked, isAutomationPaused
+    static lastTick := 0
+    now := A_TickCount
+    dt := lastTick ? Max(1, Min(250, now - lastTick)) : 33
+    lastTick := now
+
+    preview := (now < BrowserPreviewUntil)
+    if (isSessionLocked || (!Browser_Dim_Enabled && !preview)) {
+        lastTick := 0
+        BrowserChromeClear()
+        if (!Browser_Dim_Enabled && !preview) {
+            SetTimer(BrowserChromeTick, 0)
+        }
+        return
+    }
+    blocked := false
+    videoMons := ""
+    if !preview {
+        blocked := isAutomationPaused || IsExcludedProcessRunning()
+        if (Browser_Dim_VideoOnly && !blocked) {
+            videoMons := GetMoviePlayingMonitorsCached()
+        }
+    }
+    Critical "On"
+    oldCtx := 0
+    try {
+        if (now - BrowserScanTick >= 500) {
+            BrowserScanTick := now
+            BrowserChromeScan()
+        }
+        if (BrowserOverlays.Count = 0) {
+            return
+        }
+        oldCtx := DllCall("SetThreadDpiAwarenessContext", "Ptr", -4, "Ptr")    ; real pixels on mixed-scaling setups
+        pt := Buffer(8, 0)
+        DllCall("GetCursorPos", "Ptr", pt)
+        cx := NumGet(pt, 0, "Int")
+        cy := NumGet(pt, 4, "Int")
+        under := DllCall("WindowFromPoint", "Int64", NumGet(pt, 0, "Int64"), "Ptr")
+        underRoot := under ? DllCall("GetAncestor", "Ptr", under, "UInt", 2, "Ptr") : 0
+        underOwner := under ? DllCall("GetAncestor", "Ptr", under, "UInt", 3, "Ptr") : 0
+        fg := DllCall("GetForegroundWindow", "Ptr")
+        fgOwner := fg ? DllCall("GetAncestor", "Ptr", fg, "UInt", 3, "Ptr") : 0
+        keyUsed := BrowserChromeKeys(&typingKey)
+        delayMs := Max(1, Browser_Dim_Delay_Sec) * 1000
+        pct := preview ? BrowserPreviewPct : Browser_Dim_Percent
+        full := Round(Max(0, Min(100, pct)) * 2.55)
+        fadeMs := preview ? (IsSet(BrowserPreviewFadeMs) ? BrowserPreviewFadeMs : 350) : (IsSet(Browser_Dim_Fade_Ms) ? Browser_Dim_Fade_Ms : 350)
+        step := (fadeMs <= 0) ? 255 : Max(1, Round(255 * dt / fadeMs))
+
+       for hwnd, e in BrowserOverlays {
+            try {
+                if blocked {
+                    e.typing := false
+                    if (e.alpha > 0) {
+                        e.alpha := Max(0, e.alpha - step)
+                        BrowserChromePlace(e)
+                    }
+                    continue
+                }
+                if !BrowserChromeRect(e) {
+                    e.alpha := 0
+                    e.last := now
+                    e.typing := false
+                    BrowserChromePlace(e)
+                    continue
+                }
+                isFg := (fgOwner = hwnd)
+                inStrip := (cx >= e.x && cx < e.x + e.w && cy >= e.y && cy < e.y + e.h)
+                hoverStrip := (inStrip && (underOwner = hwnd || underRoot = hwnd))
+                hasPopup := false
+                if isFg {
+                    if (now - e.popTick >= 150) {        ; the popup scan walks every window: ~7x per second is plenty
+                        e.popTick := now
+                        e.pop := BrowserHasToolbarPopup(hwnd, e)
+                    }
+                    hasPopup := e.pop
+                } else {
+                    e.pop := false
+                }
+
+                addrFocused := false
+                if isFg {
+                    uiaFocus := BrowserIsAddressBarFocused(e)
+                    if (uiaFocus >= 0) {
+                        addrFocused := (uiaFocus = 1)
+                        e.typing := addrFocused
+                    } else {
+                        if ((hoverStrip && GetKeyState("LButton", "P")) || (keyUsed && typingKey) || hasPopup) {
+                            e.typing := true
+                        }
+                        if (e.typing && (!hasPopup && (GetKeyState("Enter", "P") || GetKeyState("Escape", "P") || (GetKeyState("LButton", "P") && !hoverStrip)))) {
+                            e.typing := false
+                        }
+                        addrFocused := e.typing
+                    }
+                } else {
+                    e.typing := false
+                }
+
+                ; Awake while hovering strip, a toolbar menu/dropdown is open, a shortcut is pressed, or address bar is selected
+                awake := hoverStrip || hasPopup || (isFg && keyUsed) || addrFocused
+                if awake {
+                    e.last := now
+                }
+                if preview {
+                    want := true
+                } else {
+                    want := !blocked && !awake && (now - e.last) >= delayMs
+                    if (want && Browser_Dim_VideoOnly) {
+                        want := IsObject(videoMons) && videoMons.Has(e.mon)
+                    }
+                }
+                target := want ? full : 0
+                if (e.alpha < target) {
+                    e.alpha := Min(target, e.alpha + step)
+                } else if (e.alpha > target) {
+                    e.alpha := Max(target, e.alpha - step)
+                }
+                BrowserChromePlace(e)
+            }
+        }
+    } finally {
+        if oldCtx {
+            DllCall("SetThreadDpiAwarenessContext", "Ptr", oldCtx, "Ptr")
+        }
+        Critical "Off"
+    }
+}
+; ---- Browser tab (changes take effect with Apply / Save & Close) --------------
+BrowserNum(txt, fallback, lo, hi) {
+    clean := Trim(StrReplace(txt, ",", ""))
+    return IsInteger(clean) ? Max(lo, Min(hi, Integer(clean))) : fallback
+}
+
+FormatBrowserFade(ms) {
+    return ms " ms"
+}
+BuildBrowserTab(g, dark) {
+    global Browser_Dim_Enabled, Browser_Dim_Percent, Browser_Dim_Delay_Sec, Browser_Dim_VideoOnly, Browser_Dim_FallbackH, Browser_Dim_Fade_Ms
+    global BrowserUi, SettingsLayout
+    if !IsSet(Browser_Dim_Fade_Ms) {
+        Browser_Dim_Fade_Ms := 350
+    }
+    lay := SettingsLayout
+    st := Map("prev", (Browser_Dim_Percent < 100) ? Browser_Dim_Percent : 75)
+
+    chkOn := g.AddCheckbox("x" lay.bx " y46 w" (lay.bw - 8) " Checked" Browser_Dim_Enabled, "Dim browser tabs && toolbar when idle")
+    StyleControlTheme(chkOn, dark)
+    chkOn.SetFont("s9.5 bold " (dark ? "cFFFFFF" : "c000000"), "Segoe UI")
+
+    AddSectionBox(g, lay.bx, 72, lay.bw, 96, "Idle Delay && Size", dark)
+    tDelay := g.AddText("x" lay.ix " y99 w" lay.lblW " +0x100", "Dim after (s)")
+    edtDelay := g.AddEdit("x" lay.e1 " y96 w" lay.edW " Number Limit4")
+    udDelay := g.AddUpDown("+0x80 Range1-3600", Browser_Dim_Delay_Sec)
+    tH := g.AddText("x" lay.c2x " y99 w" lay.lblW " +0x100", "Fallback height (px)")
+    edtH := g.AddEdit("x" lay.e2 " y96 w" lay.edW " Number Limit3")
+    udH := g.AddUpDown("+0x80 Range20-400", Browser_Dim_FallbackH)
+    chkVid := g.AddCheckbox("x" lay.ix " y132 w" lay.iw " Checked" Browser_Dim_VideoOnly, "Only while a video is playing on the browser's monitor")
+
+    AddSectionBox(g, lay.bx, 176, lay.bw, 166, "Dim Level && Fade  (0% = Disabled)", dark)
+    tLvl := g.AddText("x" lay.ix " y202 w" lay.dLblW " +0x100", "Dim Level")
+    sld := g.AddSlider("x" lay.dSldX " y200 w" lay.dSldW " NoTicks ToolTip +AltSubmit Range0-100", Browser_Dim_Percent)
+    txtPct := g.AddText("x" lay.dPctX " y202 w44 +0x100", Browser_Dim_Percent "%")
+    chkBlk := g.AddCheckbox("x" lay.dChkX " y201 w" lay.dChkW " Checked" (Browser_Dim_Percent = 100), "Blackout")
+
+    tFade := g.AddText("x" lay.ix " y234 w" lay.dLblW " +0x100", "Fade Speed")
+    sldFade := g.AddSlider("x" lay.dSldX " y232 w" lay.dSldW " NoTicks ToolTip +AltSubmit Range0-2000", Browser_Dim_Fade_Ms)
+    txtFade := g.AddText("x" lay.dPctX " y234 w" (lay.ir - lay.dPctX) " +0x100", FormatBrowserFade(Browser_Dim_Fade_Ms))
+
+    div := g.AddText("x" lay.ix " y266 w" lay.iw " h2 0x10")
+    btnTest := g.AddButton("x" lay.ix " y276 w132 h26", "Test Dim (3s)")
+    btnReset := g.AddButton("x" (lay.ir - lay.rstW) " y276 w" lay.rstW " h26", "Reset Defaults")
+    txtStat := g.AddText("x" lay.ix " y312 w" lay.iw " h20 +0x100", "")
+
+    for c in [tDelay, edtDelay, udDelay, tH, edtH, udH, chkVid, tLvl, sld, txtPct, chkBlk, tFade, sldFade, txtFade, div, btnTest, btnReset] {
+        StyleControlTheme(c, dark)
+    }
+    StyleControlTheme(txtStat, dark, true)
+
+    boxHelp := AddSectionBox(g, lay.bx, 350, lay.bw, 100, "How It Works", dark)
+    helpY := 374
+    for line in ["• Only the strip above the web page is covered (tabs, address bar, toolbar, bookmarks bar)."
+        , "• Hover the strip, open any toolbar menu/dropdown, or press Ctrl+L / T / K / E / N / F / W / Tab, Alt+D or F6."
+        , "• The overlay is hidden in fullscreen. Windows covering the browser stay on top of it."
+        , "• Fallback height is used for Firefox-based browsers, or when the page can't be measured."
+        , "• Missing a browser? Add its .exe name to the Browsers box on the General tab."] {
+        t := g.AddText("x" lay.ix " y" helpY " w" lay.iw " +0x100", line)
+        StyleControlTheme(t, dark, true)
+        t.GetPos(, , , &lineH)
+        helpY += lineH + 6
+    }
+    boxHelp.Move(, , , helpY - 350 + 8)
+
+    RegisterTip(chkOn, "Master switch for the browser toolbar dimmer. Click Apply or Save & Close to use your changes.")
+    RegisterTip(edtDelay, "Seconds the toolbar must be unused before it dims.")
+    RegisterTip(edtH, "Height of the tabs + toolbar at 100% Windows scaling (scaled automatically). Raise it if Firefox's toolbar is only partly covered.")
+    RegisterTip(chkVid, "On: the toolbar only dims while a video plays on the same monitor.")
+    RegisterTip(sld, "How dark the strip gets. 100% is pure black (#000000).")
+    RegisterTip(chkBlk, "Sets the Dim Level to 100% pure black.")
+    RegisterTip(sldFade, "Fade-in and fade-out duration in milliseconds (0 = instant).")
+    RegisterTip(btnTest, "Dims the toolbar of every visible browser window for 3 seconds using the values shown here, even before you click Apply.")
+    RegisterTip(btnReset, "Restores the default delay, dim level, fade speed, and height. Click Apply to keep them.")
+
+    autoCtrls := [tDelay, edtDelay, udDelay, tH, edtH, udH, chkVid]
+
+    OnBrToggle(*) {
+        SetControlsEnabled(autoCtrls, !!chkOn.Value)
+        MarkSettingsDirty()
+    }
+    OnBrSlider(*) {
+        txtPct.Text := sld.Value "%"
+        chkBlk.Value := (sld.Value = 100) ? 1 : 0
+        if (sld.Value < 100) {
+            st["prev"] := sld.Value
+        }
+        sld.Redraw()
+        MarkSettingsDirty()
+    }
+    OnBrFade(*) {
+        txtFade.Text := FormatBrowserFade(sldFade.Value)
+        sldFade.Redraw()
+        MarkSettingsDirty()
+    }
+    OnBrBlack(*) {
+        sld.Value := chkBlk.Value ? 100 : st["prev"]
+        txtPct.Text := sld.Value "%"
+        sld.Redraw()
+        MarkSettingsDirty()
+    }
+    OnBrReset(*) {
+        udDelay.Value := 4
+        udH.Value := 90
+        chkVid.Value := 0
+        sld.Value := 100
+        txtPct.Text := "100%"
+        chkBlk.Value := 1
+        sldFade.Value := 350
+        txtFade.Text := FormatBrowserFade(350)
+        sld.Redraw()
+        sldFade.Redraw()
+        MarkSettingsDirty()
+    }
+    ReportTest() {
+        global BrowserOverlays
+        local count := 0
+        local winId, entry
+        for winId, entry in BrowserOverlays {
+            if entry.shown {
+                count += 1
+            }
+        }
+        try txtStat.Text := count ? ("Previewing on " count " browser window(s). Move Settings aside if it covers them.")
+            : "Nothing to dim: open a browser (not minimized or fullscreen) and check the level is above 0%."
+    }
+    OnBrTest(*) {
+        global BrowserPreviewUntil, BrowserPreviewPct, BrowserPreviewH, BrowserPreviewFadeMs, Browser_Dim_FallbackH
+        BrowserPreviewPct := sld.Value
+        BrowserPreviewFadeMs := sldFade.Value
+        BrowserPreviewH := BrowserNum(edtH.Value, Browser_Dim_FallbackH, 20, 400)
+        BrowserPreviewUntil := A_TickCount + 3000
+        BrowserChromeApplySettings()
+        SetTimer(ReportTest, -700)
+    }
+
+    chkOn.OnEvent("Click", OnBrToggle)
+    chkVid.OnEvent("Click", MarkSettingsDirty)
+    edtDelay.OnEvent("Change", MarkSettingsDirty)
+    edtH.OnEvent("Change", MarkSettingsDirty)
+    sld.OnEvent("Change", OnBrSlider)
+    sldFade.OnEvent("Change", OnBrFade)
+    chkBlk.OnEvent("Click", OnBrBlack)
+    btnTest.OnEvent("Click", OnBrTest)
+    btnReset.OnEvent("Click", OnBrReset)
+    SetControlsEnabled(autoCtrls, !!Browser_Dim_Enabled)
+
+    BrowserUi := { chkOn: chkOn, sld: sld, sldFade: sldFade, edtDelay: edtDelay, edtH: edtH, chkVid: chkVid }
+}
+
+; Called by Apply / Save & Close (the presets file is saved right after by CommitSettingsFromGui)
+CommitBrowserTab() {
+    global BrowserUi
+    global Browser_Dim_Enabled, Browser_Dim_Percent, Browser_Dim_Delay_Sec, Browser_Dim_VideoOnly, Browser_Dim_FallbackH, Browser_Dim_Fade_Ms
+    if !IsObject(BrowserUi) {
+        return
+    }
+    Browser_Dim_Enabled := !!BrowserUi.chkOn.Value
+    Browser_Dim_Percent := BrowserUi.sld.Value
+    Browser_Dim_Fade_Ms := BrowserUi.sldFade.Value
+    Browser_Dim_VideoOnly := !!BrowserUi.chkVid.Value
+    Browser_Dim_Delay_Sec := BrowserNum(BrowserUi.edtDelay.Value, Browser_Dim_Delay_Sec, 1, 3600)
+    Browser_Dim_FallbackH := BrowserNum(BrowserUi.edtH.Value, Browser_Dim_FallbackH, 20, 400)
+    ; Show what was really stored (blank or out-of-range input gets corrected)
+    if (BrowserUi.edtDelay.Value != String(Browser_Dim_Delay_Sec)) {
+        BrowserUi.edtDelay.Value := Browser_Dim_Delay_Sec
+    }
+    if (BrowserUi.edtH.Value != String(Browser_Dim_FallbackH)) {
+        BrowserUi.edtH.Value := Browser_Dim_FallbackH
+    }
+    BrowserChromeApplySettings()
+}
+
+BrowserTabClosed() {
+    global BrowserUi, BrowserPreviewUntil
+    BrowserUi := ""
+    BrowserPreviewUntil := 0
+BrowserPreviewFadeMs := 350
+Browser_Dim_Fade_Ms := 350
 }
