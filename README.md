@@ -5,6 +5,7 @@ Multi-monitor OLED burn-in protection for Windows: per-category idle dimming and
 ## Download
 
 Get the latest version from the **[Releases page](../../releases/latest)**. Download `OLED-Engine.zip`.
+Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
 ## Install
 
