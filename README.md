@@ -6,6 +6,8 @@ Multi-monitor OLED burn-in protection for Windows: per-category idle dimming and
 
 Get the latest version from the **[Releases page](../../releases/latest)** and download `OLED-Engine.exe`.
 
+Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
 ## Install
 
 1. Create a dedicated folder somewhere you own, such as `Documents\OLED-Engine` or `C:\Tools\OLED-Engine`. Don't use `C:\Program Files`.
@@ -30,7 +32,7 @@ Set the paths on the Automation tab.
 
 ## Notes
 
-- Windows may show a SmartScreen or antivirus warning for new unsigned apps. Each release lists a SHA256 hash you can check with `Get-FileHash .\OLED-Engine.exe` in PowerShell.
+- Official releases are code-signed via the SignPath Foundation. Each release also lists a SHA256 hash you can verify with `Get-FileHash .\OLED-Engine.exe` in PowerShell.
 - Found a bug or have an idea? Open an [issue](../../issues).
 
 ## Building from source
