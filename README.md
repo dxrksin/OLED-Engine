@@ -1,4 +1,4 @@
-![OLED Engine - OLED care for Windows](assets/github_cover.png)
+![OLED Engine - OLED care for Windows](github_cover.png)
 
 # OLED Engine
 
