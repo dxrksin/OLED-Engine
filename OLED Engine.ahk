@@ -328,7 +328,7 @@ Default_Browser_Processes      := Browser_Processes.Clone()
 ; ==============================================================================
 ; 1. CONSTANTS & DERIVED RUNTIME VALUES
 ; ==============================================================================
-APP_VERSION           := "1.2.0"
+APP_VERSION           := "2.0.1"
 BUILD_ID              := "browser-1"   ; dev build name, keep in step with the newest @CHANGELOG entry
 MAX_MONITORS          := 8
 ExtraDynamicMonCfg    := Map()
@@ -4702,6 +4702,30 @@ OpenSettingsGui(initialTab := 0) {
         boxLog := AddSectionBox(g, lay.bx, aboutY, lay.bw, 24 + logEditH + 14, logTitleText, UI_Dark_Mode)
         txtLogTitle := boxLog.title
         changelogEntries := [
+            ["Version", "2.0.1"],
+            ["Fixes", "Cursor-Restore Hotkey Startup Error: Fixed an unassigned local variable error on Util_CursorRestore_Hotkey that caused OLED Engine to crash on launch or immediately after updating to v2.0.0."],
+            ["Version", "2.0.0"],
+            ["New", "Revamped Settings UI & Animations: Redesigned the Settings interface from the ground up with a cleaner layout, smoother animations, and refined theme controls."],
+            ["New", "Custom App Dimming Zones: Added a dedicated Zones tab allowing you to draw custom dim rectangles over static panels, sidebars, or HUD elements in any application with Per-Monitor v2 DPI awareness and automatic hover-clearing."],
+            ["New", "Windows Taskbar Dimming: Added a click-through dim overlay for primary and secondary taskbars that smoothly clears on hover or fullscreen apps, working even when Windows taskbar auto-hide is enabled."],
+            ["New", "Context-Aware Never Dim Manager: Revamped the app exclusion system with a running-process picker and per-app window state rules (Fullscreen, Maximized, Windowed, Background, or Minimized) where the frontmost window takes priority."],
+            ["New", "Per-Monitor Wake Modes: Added options in the monitor settings to wake dimmed displays on mouse movement, mouse click, or both."],
+            ["New", "Gentle Pre-Dim Stage: Added a smooth, subtle pre-dim transition right before monitors reach their full dim or blackout level."],
+            ["New", "Custom Theme & Accent Color Picker: Added an accent color control to customize text and slider colors using a color picker, screen eyedropper, or your Windows accent color, paired with adaptive dark mode contrast for all inputs, dropdowns, and group boxes."],
+            ["New", "Per-Browser Toolbar Heights & Monitor Awareness: Browser toolbar dimming now respects per-monitor dimming toggles and supports custom toolbar height overrides per browser executable."],
+            ["New", "Tray HDR/SDR Status Badge: Added a live HDR ON / SDR ON indicator directly next to the display mode toggle in the system tray menu."],
+            ["New", "Customizable In-App Hotkeys & Support Link: Added dedicated customizable hotkeys inside the app, including a rebindable cursor-restore hotkey replacing the hardcoded Ctrl + Alt + C shortcut, along with a Ko-fi support button."],
+            ["Fixes", "Desktop Drag-Selection Marquee: Fixed an issue where holding left-click and dragging on empty desktop space failed to render the selection box while desktop icons were hidden."],
+            ["Fixes", "AltGr / International Keyboard Conflict: Replaced the hardcoded Ctrl + Alt + C shortcut with a configurable hotkey so it no longer blocks Right Alt + C (ć) on Polish and international keyboards."],
+            ["Fixes", "Startup & Restart Persistence: Fixed app triggers and G-SYNC automation settings not staying enabled after restarting the app or rebooting Windows."],
+            ["Fixes", "Click-Mode Overlay Dismissal: Fixed an issue where opening another window prevented click-to-wake from dismissing an active dim overlay."],
+            ["Fixes", "Competitive Gaming Cursor Visibility: Fixed the mouse cursor being hidden while a competitive game is running before the screen actually dims."],
+            ["Fixes", "Unfocused Browser Toolbar Dimming: Fixed browser toolbars failing to fade in when the browser window was not focused."],
+            ["Fixes", "Browser Slider Rendering Artifact: Fixed faint white artifact boxes appearing when dragging sliders on the Browser tab."],
+            ["Fixes", "What's New Text Auto-Highlight: Fixed the What's New section in Help & About automatically highlighting all text when expanded."],
+            ["Performance", "Idle Polling Optimization: Disabled Live Status polling when auto-idle toggles are turned off to reduce background CPU usage."],
+            ["Performance", "Accelerated Wake Response & Smooth Dragging: Sped up wake fade-out transitions for immediate responsiveness while preserving dim fade times, and eliminated window dragging stutter."],
+            ["Improvements", "Settings Layout & Responsiveness: Reorganized control spacing and visual contrast across tabs for easier navigation and readability."],
             ["Version", "1.2.0"],
             ["New", "Browser Toolbar Dimming: Integrated smart auto-dimming and blackout for browser toolbars across all major browsers, supporting fullscreen/maximized windows, any resolution, and both horizontal and vertical monitors."],
             ["New", "Window-Tracked Toolbar Overlays: Browser toolbar overlays now anchor directly to the active browser window and follow its position smoothly as you move or resize it."],
@@ -5539,6 +5563,7 @@ LoadAppSettingsFromIni() {
     UI_Accent_Color             := IniRead(IniPath, "App", "AccentColor", UI_Accent_Color)
     global Comp_Games_List, Excluded_Processes_List, Media_Players_List, Browsers_List, Tray_Menu_Config
     global Mon1_Hotkey, Mon2_Hotkey, Mon3_Hotkey, Mon4_Hotkey, Mon5_Hotkey
+    global Util_CursorRestore_Hotkey, Util_Diagnostics_Hotkey, Util_DevReload_Hotkey
 
     if (!A_IsCompiled || !FileExist(IniPath)) {
         return
