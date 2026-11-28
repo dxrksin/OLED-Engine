@@ -21,6 +21,10 @@ SetWinDelay(-1)
 SetControlDelay(-1)
 #Include %A_ScriptDir%\scripts\App Automation.ahk
 #Include %A_ScriptDir%\scripts\Updater.ahk
+#Include scripts\TaskbarDimming.ahk
+#Include scripts\NeverDim.ahk
+#Include scripts\Zone Dimming.ahk
+#Include scripts\PanelZones.ahk
 Browser_Dim_Fade_Ms := 350
 BrowserPreviewFadeMs := 350
 
@@ -34,6 +38,30 @@ BrowserPreviewFadeMs := 350
 ;   FIX   Secondary monitors that were dimmed / blacked out MANUALLY now wake on mouse movement.   (separate chat, date not recorded)
 ;   FIX   Cursor flashing and desktop icons not hiding during / after a blackout - see BUILD hide-fix-4 below.   (2026-11-26)
 ;   CHANGE Lower background disk / CPU use - see BUILD perf-1 below.   (2026-11-26)
+;   FIX   Stutter while dragging / resizing windows - see BUILD smooth-1 and smooth-2 below.   (2026-11-28)
+; [tab-anim] Tab switch glide slowed from 180 to 340 ms with ease-in-out and an 8 ms timer for smoother motion.
+;   FIX   Typing now wakes dimmed monitors and counts as activity for the monitor holding the active window (kb-wake).   (2026-11-28)
+;   FIX   Tab glide repaints only what moved (about 60 fps); Tray Menu Items table starts with nothing selected.   (2026-11-28)
+;   NEW   Optional 'Support on Ko-fi' button in Help / About (set DONATE_URL near the top).   (2026-11-28)
+;   FIX   Grey / white box flashing behind the Monitor tab sliders when dragged fast (slider-box-fix: system background erase is now skipped).   (2026-11-28)
+;   FIX   Monitor 2+ dim / blackout / Gentle dim snapping instantly instead of fading over the Fade Speed (extra-fade-fix: each overlay now fades on its own clock).   (2026-11-28)
+; ------------------------------------------------------------------------------
+; BUILD smooth-2   (2026-11-28)   Settings window stutters while it is dragged
+;   FIX   Dragging the Settings window runs on the script's own thread, so every timer that fired during the drag delayed it.
+;         New IsScriptWindowDrag() (this thread's GUI_INMOVESIZE flag) now makes these do nothing mid-drag: DesktopClickDeselectWatch,
+;         CheckIdleActivity, CheckLongIdle, LongIdleWakeWatch, FastWakePoll, CursorHideGuard, SyncSettingsLiveRefreshTimer, and the
+;         1 s excluded-process re-check in IsExcludedProcessRunning (keeps its last answer).
+;   KNOWN-ISSUE  Timers inside scripts\*.ahk (Zone Dimming, TaskbarDimming, PanelZones, NeverDim, App Automation) were not part of
+;         this review; if the drag still stutters they need the same one-line guard.
+; ------------------------------------------------------------------------------
+; BUILD smooth-1   (2026-11-28)   window drag stutter
+;   FIX   The all-windows video scan (GetMoviePlayingMonitors: window loop + media-session / audio-session COM calls) could land
+;         in the middle of a window drag and block the script thread. It is now skipped while a drag / resize is in progress
+;         (new IsWindowDragActive helper) and its cache is 1.5 s (was 0.7 s).   (where: GetMoviePlayingMonitorsCached)
+;   FIX   Browser toolbar dimmer: while the browser itself is being dragged / resized its overlay is hidden at once and the
+;         50 ms UI Automation + popup scans are skipped; the 500 ms browser scan is paused during any drag.   (where: BrowserChromeTick)
+;   FIX   Settings window pollers (hover tooltip 80 ms, status boxes 500 ms, HDR indicators 1.5 s) do nothing during a drag.
+;   KNOWN-ISSUE  Not tested on a live Windows session when written. Browser dimmer overlay now un-dims for the length of a drag by design.
 ; ------------------------------------------------------------------------------
 ; BUILD perf-1   (2026-11-26)   less background work (disk writes, display-driver queries)
 ;   CHANGE Settings window no longer polls the display driver (HDR state, every 750 ms) while it is minimized or hidden.
@@ -96,7 +124,7 @@ Active_HDR_Mode               := false        ; [true / false] Tracks / sets Mon
 Comp_Game_Auto_SDR_Enabled    := true        ; [true / false] Switch Monitor 1 to SDR when a competitive game starts
 Primary_Dim_Percent           := 100        ; [Percent 0-100] SDR / Unified dim level (100 = pure #000000 blackout, 0 = off)
 Primary_HDR_Dim_Percent       := 100        ; [Percent 0-100] HDR dim level (100 = pure #000000 blackout, 0 = off)
-Primary_Fade_Ms               := 350        ; [Milliseconds] Smooth fade speed for Monitor 1 (0 = instant)
+Primary_Fade_Ms               := 757        ; [Milliseconds] Smooth fade speed for Monitor 1 (0 = instant)
 
 ; --- Display Care, Sounds, Theme & Debug Log ---
 UI_Dark_Mode                  := true        ; [true / false] true = Dark Mode, false = Light Mode
@@ -104,11 +132,13 @@ Debug_Log_Enabled             := false        ; [true / false] Default OFF; writ
 Debug_Log_Path                := ""        ; [File path] Custom log file path (blank = logs\debug.log next to the app)
 Sound_Volume_Step             := 1        ; 0, 1, 2, 3 (4 click positions total)
 UI_Custom_Color               := ""        ; [Blank or RRGGBB hex] Custom background color for the menu / Settings UI (blank = plain Dark or Light mode)
+UI_Accent_Mode                := "windows"        ; ["windows" / "custom"] windows = follow the Windows accent color
+UI_Accent_Color               := "222753"        ; [RRGGBB hex] used when UI_Accent_Mode is "custom"
 OLED_Refresh_Reminder_Enabled := false        ; [true / false] Optional toggle for manual OSD pixel refresh reminders
 OLED_Refresh_Reminder_Days    := 8        ; [Days] Days part of reminder interval
 OLED_Refresh_Reminder_Hours   := 0        ; [Hours] Hours part of reminder interval
 OLED_Refresh_Reminder_Minutes := 0        ; [Minutes 0-59] Minutes part of reminder interval
-OLED_Refresh_Popup_Monitor    := 1        ; [Monitor 1-5] Target monitor for pixel refresh popup (defaults to main monitor)
+OLED_Refresh_Popup_Monitor    := 2        ; [Monitor 1-5] Target monitor for pixel refresh popup (defaults to main monitor)
 OLED_Refresh_Alert_Style      := "Popup"        ; ["Popup" / "Notification"] Alert mode for pixel refresh reminder
 OLED_Refresh_Popup_Sound      := "Calm Rise"        ; ["None" / "Soft Chime" / "Gentle Bell" / "Glass Drop" / "Calm Rise" / "Calm Fall" / "Windows Default" / "Windows Notify" / "Windows Ding"] Sound for the Popup alert
 
@@ -117,16 +147,16 @@ Wake_Sound_Enabled            := false        ; [true / false] Play a sound when
 Dim_Sound_Name                := "Gentle Bell"        ; [Sound name, same list as above] Sound played on dim / blackout
 Wake_Sound_Name               := "Calm Rise"        ; [Sound name, same list as above] Sound played on wake
 ; --- Monitor 1 SDR / Unified Idle Delays ---
-Primary_SDR_Desktop_Sec       := 5        ; [Seconds] Monitor 1 idle delay on Desktop
+Primary_SDR_Desktop_Sec       := 18        ; [Seconds] Monitor 1 idle delay on Desktop
 Primary_SDR_Normal_Sec        := 35        ; [Seconds] Monitor 1 idle delay in Standard Games
-Primary_SDR_Comp_Sec          := 45        ; [Seconds] Monitor 1 idle delay in Competitive Games
-Primary_SDR_Paused_Sec        := 5        ; [Seconds] Monitor 1 idle delay when a Video is PAUSED
+Primary_SDR_Comp_Sec          := 60        ; [Seconds] Monitor 1 idle delay in Competitive Games
+Primary_SDR_Paused_Sec        := 10        ; [Seconds] Monitor 1 idle delay when a Video is PAUSED
 
 ; --- Monitor 1 HDR Idle Delays (Used when Separate HDR & SDR Profiles is ON and in HDR) ---
 Primary_HDR_Desktop_Sec       := 15        ; [Seconds] Monitor 1 idle delay on Desktop in HDR
 Primary_HDR_Normal_Sec        := 23        ; [Seconds] Monitor 1 idle delay in Standard Games in HDR
 Primary_HDR_Comp_Sec          := 23        ; [Seconds] Monitor 1 idle delay in Competitive Games in HDR
-Primary_HDR_Paused_Sec        := 5        ; [Seconds] Monitor 1 idle delay when a Video is PAUSED in HDR
+Primary_HDR_Paused_Sec        := 10        ; [Seconds] Monitor 1 idle delay when a Video is PAUSED in HDR
 
 ; ==============================================================================
 ; [2] ADDITIONAL MONITORS (PER-MONITOR DELAYS, DIM LEVELS & HDR PROFILES)
@@ -137,9 +167,9 @@ Extra_HDR_SDR_Mode_Enabled    := false        ; [true / false] true = Separate H
 Extra_Comp_Game_Auto_SDR      := false        ; [true / false] Switch Monitor 2 to SDR when a competitive game starts
 Extra_Dim_Percent             := 73        ; [Percent 0-100] Monitor 2 SDR / Unified dim level (100 = pure #000000 blackout)
 Extra_HDR_Dim_Percent         := 73        ; [Percent 0-100] Monitor 2 HDR dim level (100 = pure #000000 blackout)
-Extra_Fade_Ms                 := 437        ; [Milliseconds] Smooth fade speed for Monitor 2 (0 = instant)
-Extra_SDR_Desktop_Sec         := 5        ; [Seconds] Monitor 2 SDR idle delay on Desktop
-Extra_SDR_Normal_Sec          := 5        ; [Seconds] Monitor 2 SDR idle delay in Standard Games
+Extra_Fade_Ms                 := 653        ; [Milliseconds] Smooth fade speed for Monitor 2 (0 = instant)
+Extra_SDR_Desktop_Sec         := 20        ; [Seconds] Monitor 2 SDR idle delay on Desktop
+Extra_SDR_Normal_Sec          := 13        ; [Seconds] Monitor 2 SDR idle delay in Standard Games
 Extra_SDR_Comp_Sec            := 5        ; [Seconds] Monitor 2 SDR idle delay in Competitive Games
 Extra_SDR_Paused_Sec          := 10        ; [Seconds] Monitor 2 SDR idle delay when a Video is PAUSED
 Extra_HDR_Desktop_Sec         := 15        ; [Seconds] Monitor 2 HDR idle delay on Desktop in HDR
@@ -201,7 +231,7 @@ Mon5_HDR_Paused_Sec           := 10
 ; ==============================================================================
 Desktop_Hide_Enabled          := false        ; [true / false] Fade desktop icons on idle
 Cursor_Hide_Enabled           := false        ; [true / false] Hide the mouse cursor on idle
-Desktop_Idle_Sec              := 2        ; [Seconds] Idle delay before hiding cursor & fading desktop icons
+Desktop_Idle_Sec              := 5        ; [Seconds] Idle delay before hiding cursor & fading desktop icons
 Icon_Fade_Ms                  := 709        ; [Milliseconds] Smooth fade speed for desktop icons (0 = instant)
 Start_With_Windows            := false        ; [true / false] Launch automatically when signing in to Windows
 Start_Minimized               := false        ; [true / false] Start silently in the system tray without opening Settings
@@ -215,7 +245,7 @@ Excluded_Processes_List       := ""        ; [Comma-separated .exe names] Pause 
 ; ==============================================================================
 ; [5] TRAY MENU ORDER & VISIBILITY (Settings & Exit are fixed; IDs: pause, auto_dim, hdr_toggle, hdr_sdr, refresh, blackout, sec_dim, desk_hide, presets, edit, reload)
 ; ==============================================================================
-Tray_Menu_Config              := "pause:1,auto_dim:1,hdr_toggle:1,hdr_sdr:0,refresh:1,blackout:1,sec_dim:1,desk_hide:1,presets:1,edit:0"        ; [Ordered comma-separated item:enabled(1/0)]
+Tray_Menu_Config              := "pause:1,auto_dim:1,hdr_toggle:1,hdr_sdr:0,refresh:1,blackout:1,sec_dim:1,desk_hide:1,presets:1"        ; [Ordered comma-separated item:enabled(1/0)]
 
 ; ==============================================================================
 ; [6] PER-MONITOR HOTKEYS (BLANK = DISABLED; RESPECTS EACH MONITOR'S DIM LEVEL)
@@ -225,6 +255,10 @@ Mon2_Hotkey                   := "PgUp"        ; [AHK Hotkey] Toggle Dim / Black
 Mon3_Hotkey                   := ""        ; [AHK Hotkey] Toggle Dim / Blackout on Monitor 3
 Mon4_Hotkey                   := ""        ; [AHK Hotkey] Toggle Dim / Blackout on Monitor 4
 Mon5_Hotkey                   := ""        ; [AHK Hotkey] Toggle Dim / Blackout on Monitor 5
+Util_CursorRestore_Hotkey     := ""        ; [AHK Hotkey] Custom Restore Cursor shortcut (blank = Left Ctrl+Left Alt+C)
+Util_Diagnostics_Hotkey       := ""        ; [AHK Hotkey] Custom Diagnostic Report shortcut (blank = Left Ctrl+Left Alt+H)
+Util_DevReload_Hotkey         := ""        ; [AHK Hotkey] Custom Reload Script shortcut (blank = Left Ctrl+Left Alt+R)
+UtilityHkCtrls                := Map()
 
 ; ==============================================================================
 ; [6b] LONG-IDLE DISPLAY OFF, ADMIN & PRESETS (managed on the Presets tab)
@@ -313,6 +347,16 @@ IniPath               := ConfigDir "\settings.ini"
 InitAppDirectoriesAndAssets()
 LoadSettingsFromIni()
 
+TaskbarDimming.Init()
+
+ZoneDimming.Init(
+    MarkSettingsDirty,
+    BrowserChromeApplySettings,
+    (monIdx) => (monIdx = MonitorGetPrimary() ? Primary_Auto_Enabled : !!GetExtraMonSetting(monIdx, "Auto"))
+)
+
+PanelZones.Init(MarkSettingsDirty)
+
 InitAppDirectoriesAndAssets() {
     global ConfigDir, LogsDir, BackupsDir
     DirCreate(ConfigDir)
@@ -384,12 +428,126 @@ MANUAL_WAKE_GRACE_MS  := 750     ; Post-toggle grace window before a manual dim 
 MANUAL_WAKE_MOVE_PX   := 8       ; Cursor travel (px) from the toggle anchor that counts as interaction
 PRIMARY_POSTDIM_MS    := 150     ; Settle window after Monitor 1 auto-dims before it may wake again
 PRIMARY_REDIM_MS      := 1500    ; Minimum time after a wake before Monitor 1 may auto-dim again (stops dim/wake bouncing)
+WAKE_FADE_MS          := 120     ; [wake-fast] Waking fades back in at most this long (dimming keeps the slower Fade Speed you set)
+DONATE_URL            := "https://ko-fi.com/dxrksin"    ; [donate] Ko-fi page opened by the Support button in Help / About (change to your own page)
+GENTLE_LEAD_MS        := 4000    ; [gentle] How long before a full auto-dim the Gentle pre-dim starts (never more than half the idle delay)
+GENTLE_LEVEL          := 0.45    ; [gentle] The pre-dim drops to this share of the monitor's dim level
 DISPLAY_SETTLE_MS     := 1500    ; Settle window after a display / HDR topology change
 ICON_ENFORCE_MS       := 100     ; How often hidden desktop icons get re-asserted if Explorer shows them again [hide-fix-4: was 500]
 
                                  ; Wake hooks (must exist before anything calls SyncWakeHooks during startup)
 wakeHookInitX         := 0
 wakeHookInitY         := 0
+
+
+; Wake mode per monitor index: 1 = mouse move, 2 = click (left/right), 3 = both (default)
+; Wake mode per monitor index: 1 = mouse move, 2 = click (left/right), 3 = both (default)
+WakeModeStore() {
+    static m := Map()
+    return m
+}
+GetWakeMode(monIdx) {
+    m := WakeModeStore()
+    return m.Has(monIdx) ? m[monIdx] : 3
+}
+SetWakeMode(monIdx, mode) {
+    m := WakeModeStore()
+    m[monIdx] := (IsInteger(mode) && mode >= 1 && mode <= 3) ? Integer(mode) : 3
+}
+
+WakeEventAllowed(monIdx, isClick, isMove) {
+    mode := GetWakeMode(monIdx)
+    return (isClick && (mode & 2)) || (isMove && (mode & 1))
+}
+LoadWakeModes() {
+    global IniPath
+    Loop 5 {
+        v := IniRead(IniPath, "WakeMode", "Mon" A_Index, "3")
+        SetWakeMode(A_Index, IsInteger(v) ? Integer(v) : 3)
+    }
+}
+SaveWakeModes() {
+    global IniPath
+    Loop 5 {
+        IniWrite(GetWakeMode(A_Index), IniPath, "WakeMode", "Mon" A_Index)
+    }
+}
+
+; Gentle pre-dim per monitor index (off by default). Saved in the same ini as the Wake modes.
+GentleDimStore() {
+    static m := Map()
+    return m
+}
+GetGentleDim(monIdx) {
+    m := GentleDimStore()
+    return m.Has(monIdx) ? m[monIdx] : false
+}
+SetGentleDim(monIdx, on) {
+    GentleDimStore()[monIdx] := !!on
+}
+LoadGentleDims() {
+    global IniPath, MAX_MONITORS
+    Loop MAX_MONITORS {
+        SetGentleDim(A_Index, IniRead(IniPath, "GentleDim", "Mon" A_Index, "0") = "1")
+    }
+}
+SaveGentleDims() {
+    global IniPath, MAX_MONITORS
+    Loop MAX_MONITORS {
+        IniWrite(GetGentleDim(A_Index) ? 1 : 0, IniPath, "GentleDim", "Mon" A_Index)
+    }
+}
+GentleTip(monLabel) {
+    return "Gentle dim: a few seconds before " monLabel " dims fully, the screen drops partway as a heads-up. Move the mouse and it comes straight back, so nothing is lost. Works with Auto dim, so it is only available while Auto dim is on."
+}
+
+; [gentle] Takes Monitor 1's pre-dim back out (only if the overlay is still the pre-dim itself)
+ClearPrimaryPreDim() {
+    global primaryPreDimAlpha, targetPrimaryAlpha
+    if (primaryPreDimAlpha = 0) {
+        return
+    }
+    if (targetPrimaryAlpha = primaryPreDimAlpha) {
+        StartPrimaryOverlayFade(0)
+    }
+    primaryPreDimAlpha := 0
+}
+
+SameKeySet(a, b) {
+    if (a.Count != b.Count) {
+        return false
+    }
+    for k, _ in a {
+        if !b.Has(k) {
+            return false
+        }
+    }
+    return true
+}
+
+; [gentle] The alpha an overlay on Monitors 2+ fades to: the monitor's full dim level, or the pre-dim share of it while only the heads-up is showing
+ExtraMonOverlayAlpha(monIdx) {
+    global extraMonPreDimSet, extraMonDimmedSet, isManualExtraDimOn, manualExtraMonSet
+    a := GetEffectiveExtraMonAlpha(monIdx)
+    if (extraMonPreDimSet.Has(monIdx) && !extraMonDimmedSet.Has(monIdx) && !isManualExtraDimOn && !manualExtraMonSet.Has(monIdx)) {
+        return Max(1, Round(a * GENTLE_LEVEL))
+    }
+    return a
+}
+
+; Builds the "Wake: [Move | Click | Move + Click]" control on a monitor tab (identical on every tab)
+AddWakeDropdown(g, lay, darkMode, monIdx, monLabel) {
+    ddlW := 112
+    lblW := 46
+    ddlX := lay.bx + lay.bw - 8 - ddlW
+    lbl := g.AddText("x" (ddlX - lblW - 4) " y49 w" lblW " Right +0x100", "Wake:")
+    StyleControlTheme(lbl, darkMode)
+    ddl := g.AddDropDownList("x" ddlX " y45 w" ddlW " Choose" GetWakeMode(monIdx), ["Move", "Click", "Move + Click"])
+    StyleControlTheme(ddl, darkMode)
+    RegisterTip(ddl, "What wakes a dimmed " monLabel ": mouse movement, a left/right click, or both. Only input while the cursor is on this monitor counts.")
+    ddl.OnEvent("Change", MarkSettingsDirty)
+    return ddl
+}
       
 ParseCompGamesList()
 ParseExcludedProcessesList()
@@ -421,6 +579,7 @@ primaryFadeMs                      := 1
 primaryLastWakeTick                := 0
 primaryLastWakeWhy                 := ""
 primaryDimLogTick                  := 0
+primaryPreDimAlpha                 := 0        ; [gentle] alpha of Monitor 1's pre-dim while it is showing (0 = none)
 
 oledActiveMsSinceRefresh           := 0
 primaryDimmedMs                    := 0
@@ -462,6 +621,7 @@ currentExtraAlpha                  := 0
 targetExtraAlpha                   := 0
 manualExtraMonSet                  := Map()
 extraMonDimmedSet                  := Map()
+extraMonPreDimSet                  := Map()    ; [gentle] other monitors currently showing their pre-dim
 extraMonLastActiveTick             := Map()
 
 manualPrimaryStartTick             := 0
@@ -535,10 +695,21 @@ trayListViewCtrl                   := ""
 trayDraftRef                       := []
 trayRefreshFn                      := ""
 
-themeBgBrush                       := 0
-themeSurfaceBrush                  := 0
 ThemeBgRgb                         := 0
 ThemeSurfaceRgb                    := 0
+ThemeTextRgb                       := 0xFFFFFF
+ThemeMutedRgb                      := 0xB0B0B0
+ThemeDisabledRgb                   := 0x777777
+ThemeBorderRgb                     := 0x555555
+ThemeAccentRgb                     := ""
+; --- Look & feel switches for the Settings window (set any to false to go back to the old look) ---
+SectionTitleHwnds                  := Map()
+UI_Modern_Look                     := true     ; EXPERIMENT: calmer colors, borderless pill tabs, accent headings (false = old look)
+UI_Flat_Tabs                       := true     ; true = no square frame around the tab pages (matches the rounded tabs)
+UI_Soft_Look                       := true     ; true = softer, thinner outlines on tabs and group boxes
+UI_Smooth_Paint                    := false    ; true = double-buffered window painting. Known to hide / flicker the tab contents, keep OFF
+ThemeRebuilding                    := false
+ThemeReapplyPending                := false
 RefreshThemeColors()                ; builds the Dark / Light / custom-color palette used by every window
 
 currentTrayBadgeState              := -1
@@ -650,6 +821,7 @@ OnScriptRuntimeError(err, mode) {
     if (mode = "ExitApp") {
         try RestoreSystemCursors()
         try RestoreDesktopIconsImmediate()
+        try TaskbarDimming.Shutdown()
     }
 
     errMsg := "Unhandled error (" mode "): " err.Message " | What: " err.What " | File: " err.File " (line " err.Line ")"
@@ -666,32 +838,48 @@ OnScriptRuntimeError(err, mode) {
             try FileMove(ErrorLogPath, ErrorLogPath ".old", 1)
         }
 
+        ; [log-order] Newest error goes to the TOP of errors.log (the file is rewritten with the new block in front), and the
+        ; recent-activity list inside each block is also newest first, so the first thing you read is the latest event.
         stamp := FormatTime(, "yyyy-MM-dd hh:mm:ss tt")
         dump := "================================================================================`r`n"
-        dump .= "[" stamp "] OLED Engine v" APP_VERSION " | AHK v" A_AhkVersion " | Mode: " mode "`r`n"
-        dump .= "Message : " err.Message "`r`n"
-        dump .= "What    : " err.What "`r`n"
-        dump .= "Location: " err.File " (Line " err.Line ")`r`n"
+        dump .= "ERROR  " stamp "     (OLED Engine v" APP_VERSION " | AutoHotkey v" A_AhkVersion " | " mode ")`r`n"
+        dump .= "--------------------------------------------------------------------------------`r`n"
+        dump .= "What happened : " err.Message "`r`n"
+        dump .= "Function      : " err.What "`r`n"
+        dump .= "Where         : " err.File " (line " err.Line ")`r`n"
         if (err.Extra != "") {
-            dump .= "Extra   : " err.Extra "`r`n"
+            dump .= "Extra info    : " err.Extra "`r`n"
         }
+        dump .= "App state     : Paused=" OnOff(isAutomationPaused) " | ManualBlackout=" OnOff(isManualBlackoutOn) " | ManualDim=" OnOff(isManualPrimaryDimOn) " | AutoDim=" OnOff(isAutoPrimaryDimmed) " | HDR=" OnOff(Active_HDR_Mode) "`r`n"
         if (err.Stack != "") {
-            dump .= "Stack   :`r`n" StrReplace(err.Stack, "`n", "`r`n") "`r`n"
+            dump .= "Call stack    :`r`n" StrReplace(err.Stack, "`n", "`r`n") "`r`n"
         }
-        dump .= "State   : Paused=" OnOff(isAutomationPaused) " | ManualBlk=" OnOff(isManualBlackoutOn) " | ManualDim=" OnOff(isManualPrimaryDimOn) " | AutoDim=" OnOff(isAutoPrimaryDimmed) " | HDR=" OnOff(Active_HDR_Mode) "`r`n"
-        dump .= "--- Last " RingLogBuffer.Length " RingLog Events ---`r`n"
-        for line in RingLogBuffer {
-            dump .= line "`r`n"
+        dump .= "Recent activity before the error (" RingLogBuffer.Length " events, newest first):`r`n"
+        idx := RingLogBuffer.Length
+        while (idx >= 1) {
+            dump .= "  " RingLogBuffer[idx] "`r`n"
+            idx -= 1
         }
         dump .= "`r`n"
 
-        f := FileOpen(ErrorLogPath, "a", "UTF-8")
-        if IsObject(f) {
-            f.Write(dump)
-            f.Close()
-        }
+        PrependToLogFile(ErrorLogPath, dump)
     }
     return 1
+}
+
+; [log-order] Puts text at the very TOP of a log file, so the newest entry is always the first thing you see.
+; Written to a temp file first and then swapped in, so a crash mid-write cannot leave a half-written log.
+PrependToLogFile(path, text) {
+    prevCritical := Critical("On")
+    old := ""
+    try old := FileRead(path, "UTF-8")
+    tmp := path ".tmp"
+    try FileDelete(tmp)
+    f := FileOpen(tmp, "w", "UTF-8")
+    f.Write(text old)
+    f.Close()
+    FileMove(tmp, path, 1)
+    Critical(prevCritical)
 }
 
 GetEffectiveDebugLogPath(overridePath := "") {
@@ -711,7 +899,7 @@ OpenDebugLogFile(overridePath := "") {
     try {
         if !FileExist(logPath) {
             f := FileOpen(logPath, "w", "UTF-8")
-            f.Write(FormatTime(, "yyyy-MM-dd hh:mm:ss tt") " | Debug log initialized`r`n")
+            f.Write(FormatTime(, "yyyy-MM-dd hh:mm:ss tt") " | INFO  | Debug log started (newest entries are at the top)`r`n")
             f.Close()
         }
         Run('"' logPath '"')
@@ -745,31 +933,30 @@ DebugLogEvent(msg, level := "INFO") {
     }
     try {
        logPath := GetEffectiveDebugLogPath()
-        maxLogBytes := 1048576 ; 1 MB
-        keepLines := 500
+        ; [log-order] Newest line is at the TOP. The file is rewritten on every entry, so it is kept small:
+        ; above 256 KB only the newest 1500 lines are kept (older lines at the bottom are dropped).
+        maxLogBytes := 262144
+        keepLines := 1500
         if (FileExist(logPath) && FileGetSize(logPath) > maxLogBytes) {
             rawLines := StrSplit(StrReplace(FileRead(logPath, "UTF-8"), "`r`n", "`n"), "`n")
             if (rawLines.Length > 0 && rawLines[rawLines.Length] = "") {
                 rawLines.Pop()
             }
-            startIdx := Max(1, rawLines.Length - keepLines + 1)
-            trimmed := FormatTime(, "yyyy-MM-dd hh:mm:ss tt") " | INFO  | Debug log trimmed to last " keepLines " lines`r`n"
-            Loop (rawLines.Length - startIdx + 1) {
-                trimmed .= rawLines[startIdx + A_Index - 1] "`r`n"
+            trimmed := ""
+            Loop Min(keepLines, rawLines.Length) {
+                trimmed .= rawLines[A_Index] "`r`n"
             }
+            trimmed .= "-------- older entries were removed to keep this file small --------`r`n"
             fTrim := FileOpen(logPath, "w", "UTF-8")
             fTrim.Write(trimmed)
             fTrim.Close()
         }
         stamp := FormatTime(, "yyyy-MM-dd hh:mm:ss tt")
-        out := ""
+        out := stamp " | " SubStr(level "     ", 1, 5) " | " msg "`r`n"
         if (repeatCount > 0) {
-            out .= stamp " | INFO  | (the line above repeated " repeatCount " more time(s))`r`n"
+            out .= "                      | INFO  | (the entry below happened " (repeatCount + 1) " times in a row)`r`n"
         }
-        out .= stamp " | " SubStr(level "     ", 1, 5) " | " msg "`r`n"
-        f := FileOpen(logPath, "a", "UTF-8")
-        f.Write(out)
-        f.Close()
+        PrependToLogFile(logPath, out)
     }
     lastMsg := msg
     lastTick := now
@@ -1110,7 +1297,16 @@ ApplyWindowMonitorIcon(hwnd) {
     }
 }
 
+; App accent as BGR (0xBBGGRR): custom color or Windows accent, nudged so it stays visible on the current background
 GetWindowsAccentColorBGR() {
+    global ThemeAccentRgb
+    if IsInteger(ThemeAccentRgb) {
+        return RgbToBgr(ThemeAccentRgb)
+    }
+    return GetSystemAccentColorBGR()
+}
+
+GetSystemAccentColorBGR() {
     try {
         abgr := RegRead("HKCU\Software\Microsoft\Windows\DWM", "AccentColor")
         return abgr & 0x00FFFFFF
@@ -1124,7 +1320,6 @@ GetWindowsAccentColorBGR() {
     }
     return 0xD47800
 }
-
 GetDetectedMonitorCount() {
     global MAX_MONITORS
     return Max(1, Min(MAX_MONITORS, MonitorGetCount()))
@@ -1152,6 +1347,46 @@ SetMonitorHotkeyVar(monIdx, hkStr) {
         case 4: Mon4_Hotkey := cleanHk
         case 5: Mon5_Hotkey := cleanHk
     }
+}
+
+GetUtilityHotkeyVar(key) {
+    global Util_CursorRestore_Hotkey, Util_Diagnostics_Hotkey, Util_DevReload_Hotkey
+    switch key {
+        case "CursorRestore": return Util_CursorRestore_Hotkey
+        case "Diagnostics":   return Util_Diagnostics_Hotkey
+        case "DevReload":     return Util_DevReload_Hotkey
+    }
+    return ""
+}
+
+SetUtilityHotkeyVar(key, hk) {
+    global Util_CursorRestore_Hotkey, Util_Diagnostics_Hotkey, Util_DevReload_Hotkey
+    hk := Trim(hk)
+    switch key {
+        case "CursorRestore": Util_CursorRestore_Hotkey := hk
+        case "Diagnostics":   Util_Diagnostics_Hotkey := hk
+        case "DevReload":     Util_DevReload_Hotkey := hk
+    }
+}
+
+AddUtilityHkCtrl(key, ctrl) {
+    global UtilityHkCtrls
+    UtilityHkCtrls[key] := ctrl
+}
+
+ResetUtilityHotkeyControls() {
+    global UtilityHkCtrls
+    for key, ctrl in UtilityHkCtrls {
+        try ctrl.Value := ""
+    }
+}
+
+CommitUtilityHotkeys() {
+    global UtilityHkCtrls
+    for key, ctrl in UtilityHkCtrls {
+        try SetUtilityHotkeyVar(key, ctrl.Value)
+    }
+    RegisterUtilityHotkeys()
 }
 
 FormatHotkeyForDisplay(hkStr) {
@@ -1343,6 +1578,13 @@ GetMonitorHoverInfo(monIdx) {
 }
 
 ApplyMenuTheme(darkMode) {
+    ; [flicker-fix] Apply called this every time. The undocumented uxtheme flush repaints menus / windows (a brief dark flash),
+    ; so it only runs when the dark / light mode really changed.
+    static lastMode := ""
+    if (lastMode !== "" && lastMode = !!darkMode) {
+        return
+    }
+    lastMode := !!darkMode
     try {
         hUx := DllCall("GetModuleHandle", "Str", "uxtheme.dll", "Ptr")
         if !hUx {
@@ -1375,17 +1617,76 @@ RegisterGroupTitleTip(grpCtrl, titleWidthPx, tipText) {
     }
 }
 
+; [anim] The status line fades out, swaps its text while invisible, then fades back in (~90 ms each way). It only fades while the
+; window is on screen; building / rebuilding the window sets the text instantly. The colour comes from OnCtlColor (BannerFadeState().prog).
+BannerFadeState() {
+    static s := {pending: "", prog: 1.0, dir: 0, last: 0, on: false}
+    return s
+}
+
 SetStatusBannerText(text) {
     global SettingsHintCtrl, SettingsLastBannerText
     if (text = SettingsLastBannerText) {
         return
     }
     SettingsLastBannerText := text
-    if IsObject(SettingsHintCtrl) {
+    if !IsObject(SettingsHintCtrl) {
+        return
+    }
+    s := BannerFadeState()
+    shown := false
+    try shown := DllCall("IsWindowVisible", "Ptr", SettingsHintCtrl.Hwnd, "Int")
+    if !shown {
+        s.prog := 1.0
+        s.dir := 0
         try {
             SettingsHintCtrl.Visible := (text != "")
             SettingsHintCtrl.Text := text
         }
+        return
+    }
+    s.pending := text
+    s.dir := -1
+    s.last := A_TickCount
+    if !s.on {
+        s.on := true
+        SetTimer(BannerFadeTick, 15)
+    }
+}
+
+BannerFadeTick() {
+    global SettingsHintCtrl
+    s := BannerFadeState()
+    now := A_TickCount
+    step := Min(60, now - s.last) / 90
+    s.last := now
+    if !IsObject(SettingsHintCtrl) {
+        s.prog := 1.0
+        s.dir := 0
+        s.on := false
+        SetTimer(BannerFadeTick, 0)
+        return
+    }
+    if (s.dir < 0) {
+        s.prog := Max(0.0, s.prog - step)
+        if (s.prog <= 0) {
+            try {
+                SettingsHintCtrl.Visible := (s.pending != "")
+                SettingsHintCtrl.Text := s.pending
+            }
+            s.dir := 1
+        }
+    } else {
+        s.prog := Min(1.0, s.prog + step)
+        if (s.prog >= 1.0) {
+            s.dir := 0
+            s.on := false
+            SetTimer(BannerFadeTick, 0)
+        }
+    }
+    try {
+        DllCall("InvalidateRect", "Ptr", SettingsHintCtrl.Hwnd, "Ptr", 0, "Int", 1)
+        DllCall("UpdateWindow", "Ptr", SettingsHintCtrl.Hwnd)
     }
 }
 
@@ -1397,6 +1698,177 @@ GetDefaultBannerForTab(tabIdx) {
     return ""
 }
 
+; ---- Tab hover animation -----------------------------------------------------------------------------------------
+; The tab under the mouse grows by a couple of pixels and tints toward the accent, then eases back when the mouse leaves.
+; One 15 ms timer that only exists while a tab is hovered or still easing back; it stops itself afterwards.
+TabHoverState() {
+    static st := {prog: Map(), timerOn: false}
+    return st
+}
+
+StartTabHoverAnim() {
+    st := TabHoverState()
+    if !st.timerOn {
+        st.timerOn := true
+        SetTimer(TabHoverTick, 15)
+    }
+}
+
+TabHoverTick() {
+    global SettingsGui, SettingsTabsCtrl
+    st := TabHoverState()
+    hover := 0
+    tabHwnd := 0
+    try {
+        if (IsObject(SettingsGui) && IsObject(SettingsTabsCtrl)) {
+            tabHwnd := SettingsTabsCtrl.Hwnd
+        }
+    }
+    if (tabHwnd && DllCall("IsWindowVisible", "Ptr", tabHwnd, "Int") && !DllCall("IsIconic", "Ptr", SettingsGui.Hwnd, "Int")) {
+        pt := Buffer(8, 0)
+        if DllCall("GetCursorPos", "Ptr", pt.Ptr) {
+            cx := NumGet(pt, 0, "Int"), cy := NumGet(pt, 4, "Int")
+            if (DllCall("WindowFromPoint", "Int64", (cx & 0xFFFFFFFF) | (cy << 32), "Ptr") = tabHwnd) {
+                DllCall("ScreenToClient", "Ptr", tabHwnd, "Ptr", pt.Ptr)
+                hover := GetTabIndexAtClientPoint(tabHwnd, NumGet(pt, 0, "Int"), NumGet(pt, 4, "Int"))
+            }
+        }
+    }
+    if (hover && !st.prog.Has(hover)) {
+        st.prog[hover] := 0
+    }
+    done := []
+    for idx, cur in st.prog {
+        target := (idx = hover) ? 1 : 0
+        nxt := cur
+        if (cur < target) {
+            nxt := Min(1, cur + 0.25)
+        } else if (cur > target) {
+            nxt := Max(0, cur - 0.15)
+        }
+        if (nxt != cur) {
+            st.prog[idx] := nxt
+            if tabHwnd {
+                rc := Buffer(16, 0)
+                if DllCall("SendMessage", "Ptr", tabHwnd, "UInt", 0x130A, "Ptr", idx - 1, "Ptr", rc.Ptr, "Int") {
+                    NumPut("Int", NumGet(rc, 0, "Int") - 2, "Int", NumGet(rc, 4, "Int") - 2, "Int", NumGet(rc, 8, "Int") + 2, "Int", NumGet(rc, 12, "Int") + 2, rc)
+                    DllCall("InvalidateRect", "Ptr", tabHwnd, "Ptr", rc.Ptr, "Int", 0)
+                    DllCall("UpdateWindow", "Ptr", tabHwnd)
+                }
+            }
+        }
+        if (nxt <= 0 && target = 0) {
+            done.Push(idx)
+        }
+    }
+    for idx in done {
+        st.prog.Delete(idx)
+    }
+    if (!hover && st.prog.Count = 0) {
+        SetTimer(TabHoverTick, 0)
+        st.timerOn := false
+    }
+}
+
+; ---- Sliding tab pill ---------------------------------------------------------------------------------------------
+; Picking a tab makes the highlighted pill glide from the old tab to the new one (~290 ms, smootherstep, repainted at up to 60+ fps) instead of jumping.
+; Only the tab strip is repainted (the tab contents are never touched, so nothing flickers). One 6 ms timer, only while gliding.
+TabPillState() {
+    static st := {anim: false, t0: 0, fromL: 0, fromR: 0, toL: 0, toR: 0, curL: 0, curR: 0, top: 0, bottom: 0, timerOn: false}
+    return st
+}
+
+StartTabPill(oldIdx, newIdx) {
+    global SettingsTabsCtrl
+    st := TabPillState()
+    if (oldIdx = newIdx || !IsObject(SettingsTabsCtrl)) {
+        return
+    }
+    hTab := SettingsTabsCtrl.Hwnd
+    a := Buffer(16, 0)
+    b := Buffer(16, 0)
+    if (!DllCall("SendMessage", "Ptr", hTab, "UInt", 0x130A, "Ptr", oldIdx - 1, "Ptr", a.Ptr, "Int")
+        || !DllCall("SendMessage", "Ptr", hTab, "UInt", 0x130A, "Ptr", newIdx - 1, "Ptr", b.Ptr, "Int")) {
+        return
+    }
+    if (Abs(NumGet(a, 4, "Int") - NumGet(b, 4, "Int")) > 2) {    ; tabs on different rows: no glide
+        return
+    }
+    ; a click mid-glide continues from where the pill is right now; the new tab is already hovered, so the pill lands with its hover size
+    hov := TabHoverState().prog.Get(newIdx, 0)
+    hov := hov * hov * (3 - 2 * hov)
+    grow := Round(2 * hov)
+    vgrow := (hov > 0.5) ? 1 : 0
+    st.fromL := st.anim ? st.curL : NumGet(a, 0, "Int") + 2
+    st.fromR := st.anim ? st.curR : NumGet(a, 8, "Int") - 2
+    st.toL := NumGet(b, 0, "Int") + 2 - grow
+    st.toR := NumGet(b, 8, "Int") - 2 + grow
+    st.top := NumGet(b, 4, "Int") + 2 - vgrow
+    st.bottom := NumGet(b, 12, "Int") - 1 + vgrow
+    st.curL := st.fromL
+    st.curR := st.fromR
+    st.t0 := A_TickCount
+    st.first := true    ; [tab-anim] first and last frames repaint the whole span; the frames between only repaint what moved
+    st.anim := true
+    if !st.timerOn {
+        st.timerOn := true
+        SetTimer(TabPillTick, 5)
+    }
+    TabPillTick()    ; [tab-anim] paint the pill at its start spot right now so the strip never shows a gap
+}
+
+; [tab-anim] Windows lights the clicked tab the instant it is selected, BEFORE the Change event fires, so the old code showed a jump
+; to the new tab and then the pill glided from the old tab again (the quick left-right flick). TCN_SELCHANGING fires before that
+; repaint: the pill starts gliding from the old tab to the tab under the cursor first, so the only motion is old -> new.
+TabSelChanging(tabCtrl, lParam) {
+    hTab := tabCtrl.Hwnd
+    oldIdx := DllCall("SendMessage", "Ptr", hTab, "UInt", 0x130B, "Ptr", 0, "Ptr", 0, "Int") + 1
+    pt := Buffer(8, 0)
+    DllCall("GetCursorPos", "Ptr", pt.Ptr)
+    DllCall("ScreenToClient", "Ptr", hTab, "Ptr", pt.Ptr)
+    newIdx := GetTabIndexAtClientPoint(hTab, NumGet(pt, 0, "Int"), NumGet(pt, 4, "Int"))
+    if (newIdx > 0 && oldIdx > 0 && newIdx != oldIdx) {
+        StartTabPill(oldIdx, newIdx)
+    }
+    return 0
+}
+
+TabPillTick() {
+    global SettingsTabsCtrl
+    st := TabPillState()
+    hTab := 0
+    try hTab := SettingsTabsCtrl.Hwnd
+    if (!hTab || !DllCall("IsWindow", "Ptr", hTab, "Int")) {
+        st.anim := false
+        st.timerOn := false
+        SetTimer(TabPillTick, 0)
+        return
+    }
+    p := Min(1.0, (A_TickCount - st.t0) / 290)    ; [tab-anim] glide length in ms (was 180)
+    e := p * p * p * (p * (p * 6 - 15) + 10)    ; smootherstep: the gentlest start and landing
+    oldL := st.curL
+    oldR := st.curR
+    st.curL := Round(st.fromL + (st.toL - st.fromL) * e)
+    st.curR := Round(st.fromR + (st.toR - st.fromR) * e)
+    fullSpan := (!st.HasProp("first") || st.first || p >= 1.0)
+    st.first := false
+    if (p >= 1.0) {
+        st.anim := false
+        st.timerOn := false
+        SetTimer(TabPillTick, 0)
+    }
+    rc := Buffer(16, 0)
+    ; [tab-anim] was: the whole strip between the old and new tab on every frame (every tab in the way redrew, ~20 fps).
+    ; Now only the strip the pill actually moved over is repainted, which is what makes 60 fps possible.
+    if fullSpan {
+        NumPut("Int", Min(st.fromL, st.toL, st.curL) - 8, "Int", st.top - 6, "Int", Max(st.fromR, st.toR, st.curR) + 8, "Int", st.bottom + 6, rc)
+    } else {
+        NumPut("Int", Min(oldL, st.curL) - 4, "Int", st.top - 6, "Int", Max(oldR, st.curR) + 4, "Int", st.bottom + 6, rc)
+    }
+    DllCall("InvalidateRect", "Ptr", hTab, "Ptr", rc.Ptr, "Int", 0)
+    DllCall("UpdateWindow", "Ptr", hTab)
+}
+
 GetTabIndexAtClientPoint(hTab, cx, cy) {
     hti := Buffer(12, 0)
     NumPut("Int", cx, hti, 0)
@@ -1406,6 +1878,9 @@ GetTabIndexAtClientPoint(hTab, cx, cy) {
 }
 
 PollHoverTooltip() {
+    if IsWindowDragActive() {    ; [smooth-1]
+        return
+    }
     global HoverTipMap, GroupTitleTips, lastHoveredKey, SettingsGui, StatsPromptGui, RefreshPromptGui, SettingsTabsCtrl, SettingsTabTipMap
     activeGuiHwnd := 0
     if IsObject(SettingsGui) {
@@ -1442,6 +1917,11 @@ PollHoverTooltip() {
         return
     }
 
+    try {
+        if (IsObject(SettingsTabsCtrl) && hUnder = SettingsTabsCtrl.Hwnd) {
+            StartTabHoverAnim()    ; backup trigger in case the mouse-move message did not reach the handler
+        }
+    }
     hRoot := DllCall("GetAncestor", "Ptr", hUnder, "UInt", 2, "Ptr")
     if (hRoot != activeGuiHwnd && hUnder != activeGuiHwnd) {
         if (lastHoveredKey != "") {
@@ -1538,6 +2018,21 @@ BindSdrHdrStatusCtrl(swCtrl, statusCtrl) {
     }
 }
 
+; Greys the SDR | HDR switch out (and makes it unclickable) while that monitor's "Auto dim when idle" is off
+SyncHdrSwitchMaster(swCtrl) {
+    entry := EnsureHdrSwitchEntry(swCtrl)
+    if !IsObject(entry) {
+        return
+    }
+    masterOn := true
+    if IsObject(entry.masterChk) {
+        masterOn := !!entry.masterChk.Value
+    }
+    try swCtrl.Enabled := (masterOn && entry.supported)
+    UpdateSdrHdrSwitchVisual(swCtrl, entry.supported, entry.enabled, masterOn)
+    try swCtrl.Redraw()
+}
+
 UpdateSdrHdrSwitchVisual(swCtrl, isSupported, isHdrOn, isMasterEnabled) {
     entry := EnsureHdrSwitchEntry(swCtrl)
     if !IsObject(entry) {
@@ -1559,6 +2054,9 @@ UpdateSdrHdrSwitchVisual(swCtrl, isSupported, isHdrOn, isMasterEnabled) {
 }
 
 SyncLiveHdrIndicators(*) {
+    if IsWindowDragActive() {    ; [smooth-1]
+        return
+    }
     global HdrSwitchMap, SettingsGui, Active_HDR_Mode, cachedHdrState, lastHdrCheckTick
     if !IsObject(SettingsGui) || HdrSwitchMap.Count = 0 {
         return
@@ -1569,9 +2067,20 @@ SyncLiveHdrIndicators(*) {
             return
         }
     }
+    visibleSw := []
+    for hwnd, info in HdrSwitchMap {
+        try {
+            if DllCall("IsWindowVisible", "Ptr", info.ctrl.Hwnd, "Int") {
+                visibleSw.Push(info)
+            }
+        }
+    }
+    if (visibleSw.Length = 0) {
+        return    ; switches on other tabs are not visible: skip the display-driver query entirely
+    }
     InvalidateDisplayTopoCache()
     priIdx := MonitorGetPrimary()
-    for hwnd, info in HdrSwitchMap {
+    for info in visibleSw {
         mInfo := GetMonitorHdrInfo(info.monIdx)
         masterEn := true
         if IsObject(info.masterChk) {
@@ -1698,15 +2207,39 @@ AddLiveStatusBox(g, darkMode, monIdx, isPrimary, tabIdx) {
     t2 := g.AddText("x" lay.ix " y586 w" lay.iw " +0x100", "")
     StyleControlTheme(t1, darkMode)
     StyleControlTheme(t2, darkMode)
-    LiveStatusRefs.Push({ t1: t1, t2: t2, mon: monIdx, primary: isPrimary, tab: tabIdx })
+  LiveStatusRefs.Push({ t1: t1, t2: t2, mon: monIdx, primary: isPrimary, tab: tabIdx })
     try {
-        lines := GetLiveStatusLines(monIdx, isPrimary)
+        lines := AllMonitorsAutoEnabled() ? GetLiveStatusLines(monIdx, isPrimary) : LiveStatusOffLines()
         t1.Text := lines[1]
         t2.Text := lines[2]
     }
 }
 
+; True only when every detected monitor has "Auto dim when idle" turned on
+AllMonitorsAutoEnabled() {
+    global Primary_Auto_Enabled
+    priIdx := MonitorGetPrimary()
+    Loop GetDetectedMonitorCount() {
+        if (A_Index = priIdx) {
+            if !Primary_Auto_Enabled {
+                return false
+            }
+        } else if !GetExtraMonSetting(A_Index, "Auto") {
+            return false
+        }
+    }
+    return true
+}
+
+; What the Live Status boxes show while it is switched off
+LiveStatusOffLines() {
+    return ["Live Status is off", "Turn on Auto dim for every monitor to use it (saves CPU)."]
+}
+
 SyncLiveStatusBoxes(*) {
+    if IsWindowDragActive() {    ; [smooth-1]
+        return
+    }
     global SettingsGui, SettingsTabsCtrl, LiveStatusRefs
     if (!IsObject(SettingsGui) || LiveStatusRefs.Length = 0) {
         SetTimer(SyncLiveStatusBoxes, 0)
@@ -1717,6 +2250,20 @@ SyncLiveStatusBoxes(*) {
         if (WinGetMinMax("ahk_id " SettingsGui.Hwnd) = -1 || !DllCall("IsWindowVisible", "Ptr", SettingsGui.Hwnd, "Int")) {
             return
         }
+    }
+      if !AllMonitorsAutoEnabled() {
+        off := LiveStatusOffLines()
+        for ref in LiveStatusRefs {
+            try {
+                if (ref.t1.Text != off[1]) {
+                    ref.t1.Text := off[1]
+                }
+                if (ref.t2.Text != off[2]) {
+                    ref.t2.Text := off[2]
+                }
+            }
+        }
+        return
     }
     curTab := 0
     try curTab := SettingsTabsCtrl.Value
@@ -1767,6 +2314,118 @@ BgrToArgb(bgr, alpha := 0xFF) {
     return (alpha << 24) | ((bgr & 0xFF) << 16) | (bgr & 0xFF00) | ((bgr >> 16) & 0xFF)
 }
 
+; ---- Settings window animation engine -------------------------------------------------------------------------------
+; Any custom-drawn control in the Settings window can animate by asking UiAnimTrack(hwnd, target) for its current progress
+; (0..1, eased) while it draws. target is where the control should end up (0 = off / left, 1 = on / right). The first time a
+; control is seen it simply sits at its target (no animation on open). When the target changes, one shared 15 ms timer moves
+; the progress over ~120 ms, repaints only that control each step, and stops itself when nothing is moving (zero idle cost).
+UiAnimStore() {
+    static s := {m: Map(), on: false, last: 0}
+    return s
+}
+
+UiAnimTrack(hwnd, target) {
+    global SettingsGui
+    ; only controls inside the Settings window animate
+    try {
+        if (!IsObject(SettingsGui) || DllCall("GetAncestor", "Ptr", hwnd, "UInt", 2, "Ptr") != SettingsGui.Hwnd) {
+            return target
+        }
+    } catch {
+        return target
+    }
+    s := UiAnimStore()
+    if !s.m.Has(hwnd) {
+        s.m[hwnd] := {cur: target, tgt: target}
+        return target
+    }
+    e := s.m[hwnd]
+    if (e.tgt != target) {
+        e.tgt := target
+        if !s.on {
+            s.on := true
+            s.last := A_TickCount
+            SetTimer(UiAnimTick, 15)
+        }
+    }
+    return e.cur * e.cur * (3 - 2 * e.cur)
+}
+
+UiAnimTick() {
+    s := UiAnimStore()
+    now := A_TickCount
+    step := Min(60, now - s.last) / 120    ; toggles slide + blend in ~120 ms
+    s.last := now
+    moving := false
+    dead := []
+    for hwnd, e in s.m {
+        if !DllCall("IsWindow", "Ptr", hwnd, "Int") {
+            dead.Push(hwnd)
+            continue
+        }
+        if (e.cur = e.tgt) {
+            continue
+        }
+        e.cur := (e.cur < e.tgt) ? Min(e.tgt, e.cur + step) : Max(e.tgt, e.cur - step)
+        if (e.cur != e.tgt) {
+            moving := true
+        }
+        DllCall("InvalidateRect", "Ptr", hwnd, "Ptr", 0, "Int", 0)
+        DllCall("UpdateWindow", "Ptr", hwnd)
+    }
+    for hwnd in dead {
+        s.m.Delete(hwnd)
+    }
+    if !moving {
+        SetTimer(UiAnimTick, 0)
+        s.on := false
+    }
+}
+
+; Blends two 0xAARRGGBB colours (p = 0 gives a, p = 1 gives b)
+BlendArgb(a, b, p) {
+    out := 0
+    for sh in [24, 16, 8, 0] {
+        ca := (a >> sh) & 0xFF
+        cb := (b >> sh) & 0xFF
+        out |= (Round(ca + (cb - ca) * p) & 0xFF) << sh
+    }
+    return out
+}
+
+; [flicker-fix] Off-screen painting for the custom-drawn controls. Drawing the background, track, knob and text straight onto the
+; screen showed every step on every click / hover / drag (the flicker). Now each control is drawn into a memory bitmap and copied once.
+BufferedPaintBegin(hdc, l, t, r, b, &bp) {
+    bp := {mem: 0, bmp: 0, old: 0, screen: hdc, x: l, y: t, w: r - l, h: b - t}
+    if (bp.w <= 0 || bp.h <= 0) {
+        return hdc
+    }
+    mem := DllCall("CreateCompatibleDC", "Ptr", hdc, "Ptr")
+    if !mem {
+        return hdc
+    }
+    bmp := DllCall("CreateCompatibleBitmap", "Ptr", hdc, "Int", bp.w, "Int", bp.h, "Ptr")
+    if !bmp {
+        DllCall("DeleteDC", "Ptr", mem)
+        return hdc
+    }
+    bp.old := DllCall("SelectObject", "Ptr", mem, "Ptr", bmp, "Ptr")
+    bp.mem := mem
+    bp.bmp := bmp
+    return mem
+}
+
+BufferedPaintEnd(bp) {
+    if !IsObject(bp) || !bp.mem {
+        return
+    }
+    DllCall("BitBlt", "Ptr", bp.screen, "Int", bp.x, "Int", bp.y, "Int", bp.w, "Int", bp.h, "Ptr", bp.mem, "Int", 0, "Int", 0, "UInt", 0x00CC0020)
+    DllCall("SelectObject", "Ptr", bp.mem, "Ptr", bp.old)
+    DllCall("DeleteObject", "Ptr", bp.bmp)
+    DllCall("DeleteDC", "Ptr", bp.mem)
+    bp.mem := 0
+}
+
 ; Paints the NM_CUSTOMDRAW checkbox as a modern on/off switch followed by its label.
 OnCheckboxCustomDraw(chkCtrl, lParam) {
     global UI_Dark_Mode
@@ -1787,9 +2446,17 @@ OnCheckboxCustomDraw(chkCtrl, lParam) {
     enabled := DllCall("IsWindowEnabled", "Ptr", chkCtrl.Hwnd, "Int")
     checked := DllCall("SendMessage", "Ptr", chkCtrl.Hwnd, "UInt", 0x00F0, "Ptr", 0, "Ptr", 0, "Ptr") = 1
 
+    ; [flicker-fix] draw off-screen, copy once at the end
+    bp := ""
+    hdc := BufferedPaintBegin(hdc, l, t, r, b, &bp)
+    if bp.mem {
+        l := 0, t := 0, r := bp.w, b := bp.h
+    }
     ; background (same colour the page uses)
+    bgRc := Buffer(16, 0)
+    NumPut("Int", l, "Int", t, "Int", r, "Int", b, bgRc)
     bgBrush := DllCall("CreateSolidBrush", "UInt", RgbToBgr(ThemeBgRgb), "Ptr")
-    DllCall("FillRect", "Ptr", hdc, "Ptr", lParam + rcOff, "Ptr", bgBrush)
+    DllCall("FillRect", "Ptr", hdc, "Ptr", bgRc.Ptr, "Ptr", bgBrush)
     DllCall("DeleteObject", "Ptr", bgBrush)
 
     ; switch geometry
@@ -1799,12 +2466,17 @@ OnCheckboxCustomDraw(chkCtrl, lParam) {
 
     accent := BgrToArgb(GetWindowsAccentColorBGR())
     if enabled {
-        trackCol := checked ? accent : (UI_Dark_Mode ? 0xFF4A4A52 : 0xFFC4C7CE)
+        offCol := UI_Dark_Mode ? 0xFF4A4A52 : 0xFFC4C7CE
+        onCol  := accent
         knobCol  := 0xFFFFFFFF
     } else {
-        trackCol := checked ? BgrToArgb(GetWindowsAccentColorBGR(), 0x55) : (UI_Dark_Mode ? 0xFF2F2F34 : 0xFFE2E4E8)
+        offCol := UI_Dark_Mode ? 0xFF2F2F34 : 0xFFE2E4E8
+        onCol  := BgrToArgb(GetWindowsAccentColorBGR(), 0x55)
         knobCol  := UI_Dark_Mode ? 0xFF6B6B74 : 0xFFF4F4F6
     }
+    ; [anim] knob slides and the track colour blends instead of snapping (progress 0 = off, 1 = on)
+    prog := UiAnimTrack(chkCtrl.Hwnd, checked ? 1 : 0)
+    trackCol := BlendArgb(offCol, onCol, prog)
 
     GdipStart()
     gfx := 0
@@ -1815,7 +2487,7 @@ OnCheckboxCustomDraw(chkCtrl, lParam) {
     }
     GdipFillPill(gfx, tx, ty, tw, th, trackCol)
     knobD := th - 6
-    knobX := checked ? (tx + tw - knobD - 3) : (tx + 3)
+    knobX := Round((tx + 3) + ((tx + tw - knobD - 3) - (tx + 3)) * prog)
     GdipFillCircle(gfx, knobX, ty + 3, knobD, knobCol)
     DllCall("gdiplus\GdipDeleteGraphics", "Ptr", gfx)
 
@@ -1831,6 +2503,7 @@ OnCheckboxCustomDraw(chkCtrl, lParam) {
     if oldFont {
         DllCall("SelectObject", "Ptr", hdc, "Ptr", oldFont)
     }
+    BufferedPaintEnd(bp)
     return 0x00000004   ; CDRF_SKIPDEFAULT
 }
 
@@ -1856,8 +2529,16 @@ OnSdrHdrSwitchDraw(swCtrl, lParam) {
     active    := IsObject(info) ? (info.supported && info.masterEnabled) : false
     clickable := DllCall("IsWindowEnabled", "Ptr", swCtrl.Hwnd, "Int") && active
 
+    ; [flicker-fix] draw off-screen, copy once at the end
+    bp := ""
+    hdc := BufferedPaintBegin(hdc, l, t, r, b, &bp)
+    if bp.mem {
+        l := 0, t := 0, r := bp.w, b := bp.h
+    }
+    bgRc := Buffer(16, 0)
+    NumPut("Int", l, "Int", t, "Int", r, "Int", b, bgRc)
     bgBrush := DllCall("CreateSolidBrush", "UInt", RgbToBgr(ThemeBgRgb), "Ptr")
-    DllCall("FillRect", "Ptr", hdc, "Ptr", lParam + rcOff, "Ptr", bgBrush)
+    DllCall("FillRect", "Ptr", hdc, "Ptr", bgRc.Ptr, "Ptr", bgBrush)
     DllCall("DeleteObject", "Ptr", bgBrush)
 
     w := r - l
@@ -1868,12 +2549,14 @@ OnSdrHdrSwitchDraw(swCtrl, lParam) {
     DllCall("gdiplus\GdipCreateFromHDC", "Ptr", hdc, "Ptr*", &gfx)
     DllCall("gdiplus\GdipSetSmoothingMode", "Ptr", gfx, "Int", 4)
     GdipFillPill(gfx, l, t, w, h, UI_Dark_Mode ? 0xFF303036 : 0xFFE3E6EB)
+    ; [anim] the highlighted segment slides between SDR and HDR and blends its colour (progress 0 = SDR, 1 = HDR)
+    prog := UiAnimTrack(swCtrl.Hwnd, isHdr ? 1 : 0)
+    segX := Round((l + 2) + ((l + half) - (l + 2)) * prog)
     if clickable {
-        segCol := isHdr ? (UI_Dark_Mode ? 0xFF3E9A62 : 0xFF2F8F57) : (UI_Dark_Mode ? 0xFF3F7FD9 : 0xFF2F6FE0)
-        segX := isHdr ? (l + half) : (l + 2)
-        GdipFillPill(gfx, segX, t + 2, half - 2, h - 4, segCol)
+        sdrCol := UI_Dark_Mode ? 0xFF3F7FD9 : 0xFF2F6FE0
+        hdrCol := UI_Dark_Mode ? 0xFF3E9A62 : 0xFF2F8F57
+        GdipFillPill(gfx, segX, t + 2, half - 2, h - 4, BlendArgb(sdrCol, hdrCol, prog))
     } else if supported {
-        segX := isHdr ? (l + half) : (l + 2)
         GdipFillPill(gfx, segX, t + 2, half - 2, h - 4, UI_Dark_Mode ? 0xFF4A4A52 : 0xFFC9CDD4)
     }
     DllCall("gdiplus\GdipDeleteGraphics", "Ptr", gfx)
@@ -1883,7 +2566,7 @@ OnSdrHdrSwitchDraw(swCtrl, lParam) {
     DllCall("SetBkMode", "Ptr", hdc, "Int", 1)
     mutedCol := UI_Dark_Mode ? 0x9A9A9A : 0x6B6B6B
     for idx, label in ["SDR", "HDR"] {
-        segActive := supported && ((idx = 2) = isHdr)
+        segActive := supported && ((idx = 2) = (prog > 0.5))
         DllCall("SetTextColor", "Ptr", hdc, "UInt", (segActive && clickable) ? 0xFFFFFF : mutedCol)
         rc := Buffer(16, 0)
         NumPut("Int", l + (idx - 1) * half, "Int", t, "Int", l + idx * half, "Int", b, rc)
@@ -1892,7 +2575,31 @@ OnSdrHdrSwitchDraw(swCtrl, lParam) {
     if oldFont {
         DllCall("SelectObject", "Ptr", hdc, "Ptr", oldFont)
     }
+    BufferedPaintEnd(bp)
     return 0x00000004
+}
+
+; [slider-box-fix] The custom slider paint already fills its whole area off-screen (OnSliderCustomDraw), so the system's own
+; background erase is never needed. It used to run first, in the default light / grey brush, and flashed as a box behind the
+; slider whenever it was dragged quickly. SliderSwallowErase turns that erase off; SliderRedrawNoErase repaints without it.
+SliderSwallowErase(hwnd) {
+    static cb := 0
+    if !cb {
+        cb := CallbackCreate(SliderEraseSubclassProc, "Fast", 6)
+    }
+    DllCall("comctl32\SetWindowSubclass", "Ptr", hwnd, "Ptr", cb, "UPtr", 0x534C44, "UPtr", 0)
+}
+
+SliderEraseSubclassProc(hwnd, msg, wParam, lParam, idSubclass, refData) {
+    if (msg = 0x0014) {    ; WM_ERASEBKGND: claim it is already done
+        return 1
+    }
+    return DllCall("comctl32\DefSubclassProc", "Ptr", hwnd, "UInt", msg, "UPtr", wParam, "Ptr", lParam, "Ptr")
+}
+
+SliderRedrawNoErase(ctrl) {
+    ; RDW_INVALIDATE | RDW_UPDATENOW, no RDW_ERASE
+    DllCall("RedrawWindow", "Ptr", ctrl.Hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0101)
 }
 
 OnSliderCustomDraw(sldCtrl, lParam) {
@@ -1901,7 +2608,41 @@ OnSliderCustomDraw(sldCtrl, lParam) {
     drawStage := NumGet(lParam + nmhdrSize, 0, "UInt")
 
     if (drawStage = 0x00000001) {
-        return 0x00000020
+        ; [flicker-fix] draw channel + thumb together into one off-screen bitmap (was: background fill, then channel, then thumb, each visible)
+        hdc0 := NumGet(lParam + nmhdrSize + 8, 0, "Ptr")
+        cliRc0 := Buffer(16, 0)
+        DllCall("GetClientRect", "Ptr", sldCtrl.Hwnd, "Ptr", cliRc0.Ptr)
+        bp := ""
+        hdc := BufferedPaintBegin(hdc0, 0, 0, NumGet(cliRc0, 8, "Int"), NumGet(cliRc0, 12, "Int"), &bp)
+        if !bp.mem {
+            return 0x00000020    ; could not make a bitmap: fall back to the old per-part drawing
+        }
+        isEnabled := DllCall("IsWindowEnabled", "Ptr", sldCtrl.Hwnd, "Int")
+        accentCol := isEnabled ? GetWindowsAccentColorBGR() : (UI_Dark_Mode ? 0x52525B : 0xB4B8C0)
+        bgBrush := DllCall("CreateSolidBrush", "UInt", RgbToBgr(ThemeBgRgb), "Ptr")
+        DllCall("FillRect", "Ptr", hdc, "Ptr", cliRc0.Ptr, "Ptr", bgBrush)
+        DllCall("DeleteObject", "Ptr", bgBrush)
+        chRc := Buffer(16, 0)
+        DllCall("SendMessage", "Ptr", sldCtrl.Hwnd, "UInt", 0x041A, "Ptr", 0, "Ptr", chRc.Ptr)
+        cL := NumGet(chRc, 0, "Int")
+        cR := NumGet(chRc, 8, "Int")
+        midY := (NumGet(chRc, 4, "Int") + NumGet(chRc, 12, "Int")) // 2
+        thRc := Buffer(16, 0)
+        DllCall("SendMessage", "Ptr", sldCtrl.Hwnd, "UInt", 0x0419, "Ptr", 0, "Ptr", thRc.Ptr)
+        thMidX := (NumGet(thRc, 0, "Int") + NumGet(thRc, 8, "Int")) // 2
+        thMidY := (NumGet(thRc, 4, "Int") + NumGet(thRc, 12, "Int")) // 2
+        tMidX := Max(cL, Min(cR, thMidX))
+        trackBg := UI_Dark_Mode ? 0x3F3F46 : 0xD4D4D8
+        DrawRoundedFillRect(hdc, cL, midY - 2, cR, midY + 2, 4, trackBg)
+        if (tMidX > cL) {
+            DrawRoundedFillRect(hdc, cL, midY - 2, tMidX, midY + 2, 4, accentCol)
+        }
+        outerBg := UI_Dark_Mode ? 0x2B2B30 : 0xFFFFFF
+        outerBd := UI_Dark_Mode ? 0x52525B : 0xC4C7CE
+        DrawRoundedRectWithBorder(hdc, thMidX - 7, thMidY - 7, thMidX + 7, thMidY + 7, 14, outerBg, outerBd)
+        DrawRoundedFillRect(hdc, thMidX - 4, thMidY - 4, thMidX + 4, thMidY + 4, 8, accentCol)
+        BufferedPaintEnd(bp)
+        return 0x00000004
     }
     if (drawStage = 0x00010001) {
         hdc      := NumGet(lParam + nmhdrSize + 8, 0, "Ptr")
@@ -1978,7 +2719,7 @@ DrawRoundedRectWithBorder(hdc, l, t, r, b, radius, fillCol, borderCol) {
 }
 
 OnTabDrawItem(wParam, lParam, msg, hwnd) {
-    global SettingsTabsCtrl, SectionBoxTitles, UI_Dark_Mode, UI_Custom_Color, ThemeBgRgb, ThemeSurfaceRgb
+         global SettingsTabsCtrl, SectionBoxTitles, UI_Dark_Mode, ThemeBgRgb, ThemeSurfaceRgb, ThemeTextRgb, ThemeBorderRgb, ThemeAccentRgb
     ctype := NumGet(lParam, 0, "UInt")               ; 101 = tab item, 5 = static
     if (ctype != 101 && ctype != 5) {
         return
@@ -2000,7 +2741,7 @@ OnTabDrawItem(wParam, lParam, msg, hwnd) {
         trc := Buffer(16, 0)
         DllCall("DrawTextW", "Ptr", hdc, "Str", title, "Int", -1, "Ptr", trc.Ptr, "UInt", 0x800 | 0x400 | 0x20)
         tw := NumGet(trc, 8, "Int"), th := NumGet(trc, 12, "Int")
-        borderCol := MixRgb(ThemeBgRgb, UI_Dark_Mode ? 0xFFFFFF : 0x000000, 0.22)
+                borderCol := ThemeBorderRgb
         saved := DllCall("SaveDC", "Ptr", hdc)
         DllCall("ExcludeClipRect", "Ptr", hdc, "Int", l + 10, "Int", t, "Int", l + 18 + tw, "Int", t + th + 2)
         hPen := DllCall("CreatePen", "Int", 0, "Int", 1, "UInt", RgbToBgr(borderCol), "Ptr")
@@ -2010,7 +2751,7 @@ OnTabDrawItem(wParam, lParam, msg, hwnd) {
         DllCall("RestoreDC", "Ptr", hdc, "Int", saved)
         DllCall("DeleteObject", "Ptr", hPen)
         DllCall("SetBkMode", "Ptr", hdc, "Int", 1)
-        DllCall("SetTextColor", "Ptr", hdc, "UInt", UI_Dark_Mode ? 0xFFFFFF : 0x000000)
+                DllCall("SetTextColor", "Ptr", hdc, "UInt", RgbToBgr(UI_Modern_Look ? MixRgb(ThemeTextRgb, ThemeAccentRgb, 0.40) : ThemeTextRgb))    ; accent-tinted headings
         NumPut("Int", l + 14, trc, 0), NumPut("Int", t, trc, 4), NumPut("Int", r, trc, 8), NumPut("Int", t + th, trc, 12)
         DllCall("DrawTextW", "Ptr", hdc, "Str", title, "Int", -1, "Ptr", trc.Ptr, "UInt", 0x800 | 0x20)
         if oldF {
@@ -2042,44 +2783,74 @@ OnTabDrawItem(wParam, lParam, msg, hwnd) {
     SendMessage(0x133C, itemId, tci.Ptr, hwndItem)
     label := StrGet(txt, "UTF-16")
 
-    selected := (state & 1)
+    ; [flicker-fix] draw the tab off-screen and copy it once; hover progress (0..1) comes from the hover animation
+    tabProg := TabHoverState().prog.Get(itemId + 1, 0)
+    hov := tabProg * tabProg * (3 - 2 * tabProg)
+    bp := ""
+    ox := l - 2, oy := t - 2
+    hdc := BufferedPaintBegin(hdc, ox, oy, r + 2, b + 2, &bp)
+    if bp.mem {
+        l -= ox, t -= oy, r -= ox, b -= oy
+    }
+    pill := TabPillState()
+    selected := (state & 1) && !pill.anim    ; while the pill glides, every tab draws as unselected and the pill is painted over them
     bg := DllCall("CreateSolidBrush", "UInt", RgbToBgr(ThemeBgRgb), "Ptr")
     fillRc := Buffer(16, 0)
     NumPut("Int", l - 2, fillRc, 0), NumPut("Int", t - 2, fillRc, 4), NumPut("Int", r + 2, fillRc, 8), NumPut("Int", b + 2, fillRc, 12)
     DllCall("FillRect", "Ptr", hdc, "Ptr", fillRc.Ptr, "Ptr", bg)
     DllCall("DeleteObject", "Ptr", bg)
 
-    if selected {
-        if (UI_Custom_Color != "") {
-            shadeTarget := UI_Dark_Mode ? 0xFFFFFF : 0x000000
-            fillCol     := MixRgb(ThemeBgRgb, shadeTarget, UI_Dark_Mode ? 0.28 : 0.24)
-            borderCol   := MixRgb(ThemeBgRgb, shadeTarget, UI_Dark_Mode ? 0.48 : 0.42)
-        } else {
-            accentRgb := RgbToBgr(GetWindowsAccentColorBGR())
-            fillCol   := MixRgb(ThemeSurfaceRgb, accentRgb, UI_Dark_Mode ? 0.65 : 0.80)
-            borderCol := MixRgb(ThemeSurfaceRgb, accentRgb, 0.92)
-        }
+        if selected {
+        fillCol   := MixRgb(ThemeSurfaceRgb, ThemeAccentRgb, UI_Modern_Look ? 0.90 : (UI_Dark_Mode ? 0.65 : 0.80))
+        borderCol := MixRgb(ThemeSurfaceRgb, ThemeAccentRgb, 0.92)
     } else {
-        fillCol   := ThemeSurfaceRgb
+        fillCol   := hov > 0 ? MixRgb(ThemeSurfaceRgb, ThemeAccentRgb, 0.16 * hov) : ThemeSurfaceRgb
         borderCol := MixRgb(ThemeBgRgb, UI_Dark_Mode ? 0xFFFFFF : 0x000000, 0.16)
     }
-    DrawRoundedRectWithBorder(hdc, l + 2, t + 2, r - 2, b - 1, 14, RgbToBgr(fillCol), RgbToBgr(borderCol))
+    if UI_Soft_Look {
+        borderCol := fillCol    ; no outline around the pill
+    }
+    grow := Round(2 * hov)
+    vgrow := (hov > 0.5) ? 1 : 0
+    DrawRoundedRectWithBorder(hdc, l + 2 - grow, t + 2 - vgrow, r - 2 + grow, b - 1 + vgrow, 14, RgbToBgr(fillCol), RgbToBgr(borderCol))
+
+    ; [anim] the gliding pill is painted over every tab it passes; each tab only keeps the part inside its own bitmap
+    pillOv := 0
+    pFill := 0
+    if pill.anim {
+        pFill   := MixRgb(ThemeSurfaceRgb, ThemeAccentRgb, UI_Modern_Look ? 0.90 : (UI_Dark_Mode ? 0.65 : 0.80))
+        pBorder := UI_Soft_Look ? pFill : MixRgb(ThemeSurfaceRgb, ThemeAccentRgb, 0.92)
+        pl := pill.curL - (bp.mem ? ox : 0)
+        pr := pill.curR - (bp.mem ? ox : 0)
+        DrawRoundedRectWithBorder(hdc, pl, pill.top - (bp.mem ? oy : 0), pr, pill.bottom - (bp.mem ? oy : 0), 14, RgbToBgr(pFill), RgbToBgr(pBorder))
+        pillOv := Max(0, Min(pr, r - 2) - Max(pl, l + 2)) / Max(1, r - l - 4)
+    }
 
     ; smaller font so long names fit
     hFont := SendMessage(0x31, 0, 0, hwndItem)
     small := 0
+    static smallKey := 0, smallFont := 0    ; [tab-anim] the 84% font is built once per tab font, not on every frame of every tab
     if hFont {
-        lf := Buffer(92, 0)
-        if DllCall("GetObject", "Ptr", hFont, "Int", 92, "Ptr", lf.Ptr) {
-            NumPut("Int", Round(NumGet(lf, 0, "Int") * 0.84), lf, 0)
-            small := DllCall("CreateFontIndirectW", "Ptr", lf.Ptr, "Ptr")
+        if (hFont != smallKey || !smallFont) {
+            if smallFont {
+                DllCall("DeleteObject", "Ptr", smallFont)
+                smallFont := 0
+            }
+            lf := Buffer(92, 0)
+            if DllCall("GetObject", "Ptr", hFont, "Int", 92, "Ptr", lf.Ptr) {
+                NumPut("Int", Round(NumGet(lf, 0, "Int") * 0.84), lf, 0)
+                smallFont := DllCall("CreateFontIndirectW", "Ptr", lf.Ptr, "Ptr")
+            }
+            smallKey := hFont
         }
+        small := smallFont
     }
     oldF := DllCall("SelectObject", "Ptr", hdc, "Ptr", small ? small : hFont, "Ptr")
     DllCall("SetBkMode", "Ptr", hdc, "Int", 1)
 
-    if selected {
-        fillLum := (((fillCol >> 16) & 0xFF) * 299 + ((fillCol >> 8) & 0xFF) * 587 + (fillCol & 0xFF) * 114) / 1000
+    if (selected || pillOv > 0.5) {
+        litCol := selected ? fillCol : pFill
+        fillLum := (((litCol >> 16) & 0xFF) * 299 + ((litCol >> 8) & 0xFF) * 587 + (litCol & 0xFF) * 114) / 1000
         tabTxtCol := (fillLum < 145) ? 0xFFFFFF : 0x111111
     } else {
         tabTxtCol := UI_Dark_Mode ? 0xD8D8D8 : 0x202020
@@ -2090,9 +2861,7 @@ OnTabDrawItem(wParam, lParam, msg, hwnd) {
     NumPut("Int", l + 2, txtRc, 0), NumPut("Int", t, txtRc, 4), NumPut("Int", r - 2, txtRc, 8), NumPut("Int", b, txtRc, 12)
     DllCall("DrawTextW", "Ptr", hdc, "Str", label, "Int", -1, "Ptr", txtRc.Ptr, "UInt", 0x8825)
     DllCall("SelectObject", "Ptr", hdc, "Ptr", oldF)
-    if small {
-        DllCall("DeleteObject", "Ptr", small)
-    }
+    BufferedPaintEnd(bp)
     return 1
 }
 
@@ -2121,7 +2890,7 @@ OnLvCustomDraw(lvCtrl, lParam) {
 
 OnCtlColor(wParam, lParam, msg, hwnd) {
     global UI_Dark_Mode, SettingsGui, StatsPromptGui, RefreshPromptGui, HdrSwitchMap, CareUiRefs
-    global themeBgBrush, themeSurfaceBrush
+    global themeBgBrush, themeSurfaceBrush, SectionTitleHwnds, ThemeAccentRgb, SettingsHintCtrl
 
     isOurWindow := false
     if (IsObject(SettingsGui) && hwnd = SettingsGui.Hwnd) {
@@ -2129,6 +2898,8 @@ OnCtlColor(wParam, lParam, msg, hwnd) {
     } else if (IsObject(StatsPromptGui) && hwnd = StatsPromptGui.gui.Hwnd) {
         isOurWindow := true
     } else if (IsObject(RefreshPromptGui) && hwnd = RefreshPromptGui.Hwnd) {
+        isOurWindow := true
+    } else if (IsObject(NeverDim.Dlg) && hwnd = NeverDim.Dlg.Hwnd) {
         isOurWindow := true
     }
     if !isOurWindow {
@@ -2148,7 +2919,13 @@ OnCtlColor(wParam, lParam, msg, hwnd) {
 
     isCtrlEnabled := lParam ? DllCall("IsWindowEnabled", "Ptr", lParam, "Int") : true
 
-    textColor := isRedAlertText ? 0x303BFF : (isCtrlEnabled ? (UI_Dark_Mode ? 0xFFFFFF : 0x000000) : (UI_Dark_Mode ? 0x776E6E : 0xA69E9A))
+       textColor := isRedAlertText ? RgbToBgr(EnsureContrast(0xFF3B30, ThemeBgRgb, 3.0)) : RgbToBgr(isCtrlEnabled ? ThemeTextRgb : ThemeDisabledRgb)
+    if (UI_Modern_Look && lParam && isCtrlEnabled && SectionTitleHwnds.Has(lParam)) {
+        textColor := RgbToBgr(MixRgb(ThemeTextRgb, ThemeAccentRgb, 0.45))    ; accent-tinted section heading
+    }
+    if (lParam && IsObject(SettingsHintCtrl) && lParam = SettingsHintCtrl.Hwnd) {    ; [anim] status line cross-fade
+        textColor := RgbToBgr(MixRgb(ThemeBgRgb, ThemeTextRgb, BannerFadeState().prog))
+    }
     DllCall("SetTextColor", "Ptr", hdc, "UInt", textColor)
     if (msg = 0x0133 || msg = 0x0134) {
         DllCall("SetBkColor", "Ptr", hdc, "UInt", RgbToBgr(ThemeSurfaceRgb))
@@ -2160,12 +2937,17 @@ OnCtlColor(wParam, lParam, msg, hwnd) {
     return themeBgBrush
 }
 
-; Fades a window in with the same smooth ease Windows uses for its own pop-ups
 ShowWithFade(guiObj, opts := "", ms := 160) {
+    global ThemeRebuilding
     hwnd := guiObj.Hwnd
+    ; Theme rebuilds: no alpha fade (a layered window at alpha 0 leaves boxes/lines unpainted)
+    if ThemeRebuilding {
+        guiObj.Show(opts)
+        ForceFullRepaint(hwnd)
+        return
+    }
     WinSetTransparent(0, hwnd)
     guiObj.Show(opts)
-    ; A window shown at alpha 0 never gets its child controls painted -> blank until hovered. Force a full paint now.
     DllCall("RedrawWindow", "Ptr", hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0585)
     start := A_TickCount
     Loop {
@@ -2177,55 +2959,156 @@ ShowWithFade(guiObj, opts := "", ms := 160) {
         Sleep(8)
     }
     WinSetTransparent("Off", hwnd)
-    ; Repaint everything once the fade is done, and again shortly after for controls that finish late
-    DllCall("RedrawWindow", "Ptr", hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0585)
-    SetTimer(() => (WinExist(hwnd) ? DllCall("RedrawWindow", "Ptr", hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0585) : 0), -120)
+    ForceFullRepaint(hwnd)
+    SetTimer(() => (WinExist(hwnd) ? ForceFullRepaint(hwnd, false) : 0), -120)
+}
+
+; Repaints every child bottom-to-top (tab first, then boxes, then controls on top)
+; [flicker-fix] erase := false repaints without wiping the background first, so already-correct controls do not blink.
+; Only the first repaint after showing a window needs the erase; the delayed follow-up repaints do not.
+ForceFullRepaint(hwnd, erase := true) {
+    DllCall("RedrawWindow", "Ptr", hwnd, "Ptr", 0, "Ptr", 0, "UInt", erase ? 0x0585 : 0x0181)
+    child := DllCall("GetWindow", "Ptr", hwnd, "UInt", 1, "Ptr")        ; GW_HWNDLAST
+    while child {
+        DllCall("InvalidateRect", "Ptr", child, "Ptr", 0, "Int", erase ? 1 : 0)
+        DllCall("UpdateWindow", "Ptr", child)
+        child := DllCall("GetWindow", "Ptr", child, "UInt", 3, "Ptr")   ; GW_HWNDPREV
+    }
 }
 
 ApplyGuiTheme(guiObj, darkMode) {
-    global ThemeBgRgb
+    global ThemeBgRgb, ThemeTextRgb, ThemeBorderRgb
     ApplyWindowMonitorIcon(guiObj.Hwnd)
     guiObj.BackColor := Format("{:06X}", ThemeBgRgb)
-    guiObj.SetFont("s9.5 " (darkMode ? "cFFFFFF" : "c000000"), "Segoe UI")
+    guiObj.SetFont("s9.5 c" Format("{:06X}", ThemeTextRgb), "Segoe UI")
     try DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", guiObj.Hwnd, "UInt", 20, "Int*", darkMode ? 1 : 0, "UInt", 4)
+    ; Windows 11 only (silently ignored on Windows 10): title bar and border follow the theme
+    try DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", guiObj.Hwnd, "UInt", 35, "UInt*", RgbToBgr(ThemeBgRgb), "UInt", 4)
+    try DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", guiObj.Hwnd, "UInt", 36, "UInt*", RgbToBgr(ThemeTextRgb), "UInt", 4)
+    try DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", guiObj.Hwnd, "UInt", 34, "UInt*", RgbToBgr(ThemeBorderRgb), "UInt", 4)
 }
 
 StyleControlTheme(ctrl, darkMode, muted := false) {
+    global UI_Custom_Color, ThemeSurfaceRgb, ThemeTextRgb, ThemeMutedRgb
     try {
         modeStr := darkMode ? "DarkMode_Explorer" : "Explorer"
+        cfdStr  := darkMode ? "DarkMode_CFD" : "CFD"          ; the theme class Windows itself uses for dark / light edits + combos
+        txtHex  := Format("{:06X}", muted ? ThemeMutedRgb : ThemeTextRgb)
         if (ctrl.Type = "CheckBox") {
             DllCall("uxtheme\SetWindowTheme", "Ptr", ctrl.Hwnd, "Str", modeStr, "Ptr", 0)
             ctrl.OnNotify(-12, OnCheckboxCustomDraw)
         } else if (ctrl.Type = "Slider") {
             DllCall("uxtheme\SetWindowTheme", "Ptr", ctrl.Hwnd, "Str", modeStr, "Ptr", 0)
             ctrl.OnNotify(-12, OnSliderCustomDraw)
+            SliderSwallowErase(ctrl.Hwnd)
         } else if (ctrl.Type = "Button") {
             DllCall("uxtheme\SetWindowTheme", "Ptr", ctrl.Hwnd, "Str", "Explorer", "Ptr", 0)
-        } else if (ctrl.Type = "Edit" || ctrl.Type = "ListBox" || ctrl.Type = "ComboBox" || ctrl.Type = "DDL" || ctrl.Type = "Tab3" || ctrl.Type = "Hotkey") {
+        } else if (ctrl.Type = "Edit" || ctrl.Type = "ListBox" || ctrl.Type = "ComboBox" || ctrl.Type = "DDL" || ctrl.Type = "Hotkey") {
+            if (UI_Custom_Color != "") {
+                ; classic look so OnCtlColor can paint the exact computed surface color
+                DllCall("uxtheme\SetWindowTheme", "Ptr", ctrl.Hwnd, "Str", "", "Str", "")
+            } else {
+                DllCall("uxtheme\SetWindowTheme", "Ptr", ctrl.Hwnd, "Str", cfdStr, "Ptr", 0)
+            }
+        } else if (ctrl.Type = "Tab3") {
             DllCall("uxtheme\SetWindowTheme", "Ptr", ctrl.Hwnd, "Str", modeStr, "Ptr", 0)
         } else if (ctrl.Type = "ListView") {
             DllCall("uxtheme\SetWindowTheme", "Ptr", ctrl.Hwnd, "Str", "", "Str", "")
-            ctrl.Opt((darkMode ? "cFFFFFF" : "c000000") " Background" Format("{:06X}", ThemeSurfaceRgb))
+            ctrl.Opt("c" Format("{:06X}", ThemeTextRgb) " Background" Format("{:06X}", ThemeSurfaceRgb))
             return
         }
-        colorHex := darkMode ? (muted ? "cD4D4D8" : "cFFFFFF") : (muted ? "c3F3F46" : "c000000")
-        ctrl.SetFont("s9.5 " colorHex, "Segoe UI")
+        ctrl.SetFont("s9.5 c" txtHex, "Segoe UI")
     }
 }
 
+; Group container built from real 1px line controls + a title, so no repaint can make the borders disappear
 AddSectionBox(guiObj, x, y, w, h, titleText, darkMode) {
-        grp := guiObj.AddGroupBox("x" x " y" y " w" w " h" h, titleText)
-    grp.SetFont("s9.5 bold " (darkMode ? "cFFFFFF" : "c000000"), "Segoe UI")
-    try {
-        if darkMode {
-            DllCall("uxtheme\SetWindowTheme", "Ptr", grp.Hwnd, "Str", "", "Str", "")
-        } else {
-            DllCall("uxtheme\SetWindowTheme", "Ptr", grp.Hwnd, "Str", "Explorer", "Ptr", 0)
+    return SectionBox(guiObj, x, y, w, h, titleText)
+}
+
+class SectionBox {
+    __New(g, x, y, w, h, titleText) {
+        global ThemeTextRgb, ThemeBorderRgb, ThemeBgRgb, SectionTitleHwnds
+        ; Modern look: the box outline lines take the window background color, so sections are separated by
+        ; spacing and an accent heading instead of a square frame (geometry is kept, so nothing else changes).
+        opt := "x" x " y" y " w1 h1 -E0x20000 Background" Format("{:06X}", UI_Modern_Look ? ThemeBgRgb : ThemeBorderRgb)
+        this.topL := g.AddProgress(opt)
+        this.topR := g.AddProgress(opt)
+        this.lft  := g.AddProgress(opt)
+        this.rgt  := g.AddProgress(opt)
+        this.btm  := g.AddProgress(opt)
+        this.title := g.AddText("x" (x + 12) " y" y " w10 h18 +0x100", titleText)
+        this.title.SetFont("s9.5 bold c" Format("{:06X}", ThemeTextRgb), "Segoe UI")
+        SectionTitleHwnds[this.title.Hwnd] := true
+        this.Layout(x, y, w, h)
+    }
+
+    Layout(x, y, w, h) {
+        label := StrReplace(this.title.Text, "&&", "&")
+        ; GUI units to pixels (works for both +DPIScale and -DPIScale windows)
+        this.title.Move(, , 100)
+        rc := Buffer(16, 0)
+        DllCall("GetClientRect", "Ptr", this.title.Hwnd, "Ptr", rc)
+        scale := NumGet(rc, 8, "Int") / 100
+        ; Width of the bold title text
+        hdc := DllCall("GetDC", "Ptr", this.title.Hwnd, "Ptr")
+        hFont := SendMessage(0x31, 0, 0, this.title)
+        oldFont := DllCall("SelectObject", "Ptr", hdc, "Ptr", hFont, "Ptr")
+        size := Buffer(8, 0)
+        DllCall("GetTextExtentPoint32W", "Ptr", hdc, "Str", label, "Int", StrLen(label), "Ptr", size)
+        DllCall("SelectObject", "Ptr", hdc, "Ptr", oldFont)
+        DllCall("ReleaseDC", "Ptr", this.title.Hwnd, "Ptr", hdc)
+        tw := Ceil(NumGet(size, 0, "Int") / scale) + 4
+
+        top := y + 8
+        this.title.Move(x + 12, y, tw, 18)
+        this.topL.Move(x, top, 8, 1)
+        this.topR.Move(x + 16 + tw, top, Max(1, w - 16 - tw), 1)
+        this.lft.Move(x, top, 1, h - 8)
+        this.rgt.Move(x + w - 1, top, 1, h - 8)
+        this.btm.Move(x, y + h - 1, w, 1)
+    }
+
+    GetPos(&x?, &y?, &w?, &h?) {
+        this.lft.GetPos(&lx, &ly, , &lh)
+        this.btm.GetPos(, , &bw)
+        x := lx, y := ly - 8, w := bw, h := lh + 8
+    }
+
+    Move(x?, y?, w?, h?) {
+        this.GetPos(&cx, &cy, &cw, &ch)
+        this.Layout(x ?? cx, y ?? cy, w ?? cw, h ?? ch)
+    }
+
+    Hwnd => this.title.Hwnd
+    Type => "SectionBox"
+
+    Text {
+        get => this.title.Text
+        set {
+            this.title.Text := value
+            this.Move()
         }
     }
-    return grp
-}
 
+    Visible {
+        get => this.title.Visible
+        set {
+            for part in [this.topL, this.topR, this.lft, this.rgt, this.btm, this.title] {
+                part.Visible := value
+            }
+        }
+    }
+
+    Enabled {
+        get => this.title.Enabled
+        set => this.title.Enabled := value
+    }
+
+    Redraw() => this.title.Redraw()
+    SetFont(*) => 0
+    OnEvent(name, callback) => this.title.OnEvent(name, callback)
+}
 ; ==============================================================================
 ; SOUNDS: gentle synthesized tones (built in memory, no files needed) + Windows' own sounds
 ; ==============================================================================
@@ -2468,6 +3351,95 @@ SetSettingsClean() {
         SettingsApplyBtn.Enabled := false
     }
 }
+
+; [anim] "Saved" confirmation: an accent ring flashes inside the Apply button and fades out (~400 ms). One 15 ms timer while it runs.
+ApplyPulseState() {
+    static s := {t0: 0, on: false}
+    return s
+}
+
+PulseApplyButton() {
+    global SettingsApplyBtn
+    if !IsObject(SettingsApplyBtn) {
+        return
+    }
+    s := ApplyPulseState()
+    s.t0 := A_TickCount
+    if !s.on {
+        s.on := true
+        SetTimer(ApplyPulseTick, 15)
+    }
+    ApplyPulseTick()
+}
+
+ApplyPulseTick() {
+    global SettingsApplyBtn, ThemeSurfaceRgb, ThemeAccentRgb
+    s := ApplyPulseState()
+    hwnd := 0
+    try hwnd := SettingsApplyBtn.Hwnd
+    if (!hwnd || !DllCall("IsWindow", "Ptr", hwnd, "Int")) {
+        s.on := false
+        SetTimer(ApplyPulseTick, 0)
+        return
+    }
+    p := (A_TickCount - s.t0) / 400
+    if (p >= 1.0) {
+        s.on := false
+        SetTimer(ApplyPulseTick, 0)
+        DllCall("InvalidateRect", "Ptr", hwnd, "Ptr", 0, "Int", 1)    ; the button repaints itself, which wipes the ring
+        DllCall("UpdateWindow", "Ptr", hwnd)
+        return
+    }
+    k := (p < 0.2) ? (p / 0.2) : ((1 - p) / 0.8)
+    rc := Buffer(16, 0)
+    DllCall("GetClientRect", "Ptr", hwnd, "Ptr", rc.Ptr)
+    w := NumGet(rc, 8, "Int")
+    h := NumGet(rc, 12, "Int")
+    hdc := DllCall("GetDC", "Ptr", hwnd, "Ptr")
+    if !hdc {
+        return
+    }
+    pen := DllCall("CreatePen", "Int", 0, "Int", 3, "UInt", RgbToBgr(MixRgb(ThemeSurfaceRgb, ThemeAccentRgb, k)), "Ptr")
+    oldPen := DllCall("SelectObject", "Ptr", hdc, "Ptr", pen, "Ptr")
+    oldBr := DllCall("SelectObject", "Ptr", hdc, "Ptr", DllCall("GetStockObject", "Int", 5, "Ptr"), "Ptr")    ; NULL_BRUSH
+    DllCall("RoundRect", "Ptr", hdc, "Int", 1, "Int", 1, "Int", w - 1, "Int", h - 1, "Int", 8, "Int", 8)
+    DllCall("SelectObject", "Ptr", hdc, "Ptr", oldBr)
+    DllCall("SelectObject", "Ptr", hdc, "Ptr", oldPen)
+    DllCall("DeleteObject", "Ptr", pen)
+    DllCall("ReleaseDC", "Ptr", hwnd, "Ptr", hdc)
+}
+
+; [anim] The window fades out (110 ms) to match its fade-in. Only for closes the person asked for (Cancel, X, Esc, Save && Close);
+; internal close-and-reopen rebuilds use CloseSettingsGui directly and stay instant.
+FadeOutWindow(guiObj, ms := 110) {
+    hwnd := guiObj.Hwnd
+    if (!DllCall("IsWindowVisible", "Ptr", hwnd, "Int") || DllCall("IsIconic", "Ptr", hwnd, "Int")) {
+        return
+    }
+    start := A_TickCount
+    Loop {
+        p := Min(1.0, (A_TickCount - start) / ms)
+        WinSetTransparent(Round(255 * (1 - p * p * (3 - 2 * p))), hwnd)
+        if (p >= 1.0) {
+            break
+        }
+        Sleep(8)
+    }
+}
+
+CloseSettingsGuiFaded(*) {
+    global SettingsGui
+    static closing := false
+    if closing {
+        return
+    }
+    if IsObject(SettingsGui) {
+        closing := true
+        try FadeOutWindow(SettingsGui, 110)
+        closing := false
+    }
+    CloseSettingsGui()
+}
 ; ==============================================================================
 ; 5. UNIFIED MULTI-MONITOR SETTINGS GUI
 ; ==============================================================================
@@ -2507,7 +3479,7 @@ SetSettingsLayout(tabW) {
 AddChangelogRichEdit(g, x, y, w, h, entries, dark) {
     global ThemeSurfaceRgb
     static hLib := DllCall("LoadLibrary", "Str", "Msftedit.dll", "Ptr")
-    re := g.AddCustom("ClassRICHEDIT50W x" x " y" y " w" w " h" h " +0x4 +0x40 +0x800 +0x200000 +E0x200")
+       re := g.AddCustom("ClassRICHEDIT50W x" x " y" y " w" w " h" h " +0x4 +0x40 +0x800 +0x200000 +E0x200 -Tabstop")
     hwnd := re.Hwnd
     try DllCall("uxtheme\SetWindowTheme", "Ptr", hwnd, "Str", dark ? "DarkMode_Explorer" : "Explorer", "Ptr", 0)
 
@@ -2619,6 +3591,7 @@ OpenReleaseNotesWindow(entries) {
     ApplyGuiTheme(rg, UI_Dark_Mode)
     rg.MarginX := 0
     rg.MarginY := 0
+    rg.AddButton("x-60 y-60 w1 h1", "")      ; invisible focus holder: Windows gives it the first focus instead of selecting the notes
     bigRe := AddChangelogRichEdit(rg, 12, 12, 760, 560, entries, UI_Dark_Mode)
     rg.OnEvent("Size", (gObj, minMax, w, h) => (minMax = -1) ? 0 : bigRe.Move(12, 12, w - 24, h - 24))
     CloseReleaseNotes(*) {
@@ -2629,7 +3602,16 @@ OpenReleaseNotesWindow(entries) {
     rg.OnEvent("Close", CloseReleaseNotes)
     rg.OnEvent("Escape", CloseReleaseNotes)
     ReleaseNotesGui := rg
+        ; Hide the selection highlight while the window fades in (Windows selects everything when it gives the box focus)
+    DllCall("SendMessageW", "Ptr", bigRe.Hwnd, "UInt", 0x43F, "Ptr", 1, "Ptr", 0)       ; EM_HIDESELECTION: hide
     ShowWithFade(rg, "w784 h584 Center")
+    ClearNotesSel() {
+        try {
+            DllCall("SendMessageW", "Ptr", bigRe.Hwnd, "UInt", 0xB1, "Ptr", 0, "Ptr", 0)    ; EM_SETSEL 0,0: nothing selected
+            DllCall("SendMessageW", "Ptr", bigRe.Hwnd, "UInt", 0x43F, "Ptr", 0, "Ptr", 0)   ; EM_HIDESELECTION: show again
+        }
+    }
+    ClearNotesSel()
 }
 
 ReflowForeignTabControls(g, knownHwnds) {
@@ -2675,6 +3657,7 @@ OpenSettingsGui(initialTab := 0) {
         return
     }
     isOpeningSettingsGui := true
+    try ProcessSetPriority("Normal")    ; the engine idles at BelowNormal; building the window should not wait behind other apps
     try {
         global APP_VERSION, ErrorLogPath
         global SettingsGui, SettingsTabsCtrl, SettingsTabDefaultBanner, SettingsTabTipMap, GroupTitleTips
@@ -2697,7 +3680,7 @@ OpenSettingsGui(initialTab := 0) {
         global Extra_Mon5_Dim_Percent, Extra_Mon5_HDR_Dim_Percent, Extra_Mon5_SDR_Sec, Extra_Mon5_HDR_Sec
         global Desktop_Hide_Enabled, Desktop_Idle_Sec, Icon_Fade_Ms, Start_With_Windows, Start_Minimized
         global Comp_Games_List, Excluded_Processes_List, TrayMenuItems, trayListViewCtrl, trayDraftRef, trayRefreshFn
-        global LiveStatusRefs
+        global LiveStatusRefs, SectionTitleHwnds
 
         if IsObject(SettingsGui) {
             try {
@@ -2716,6 +3699,7 @@ OpenSettingsGui(initialTab := 0) {
 
         GroupTitleTips := []
         LiveStatusRefs := []
+        SectionTitleHwnds := Map()
         HdrSwitchMap := Map()
         monCount := GetDetectedMonitorCount()
         priIdx := MonitorGetPrimary()
@@ -2731,9 +3715,9 @@ OpenSettingsGui(initialTab := 0) {
             }
         }
 
-        tabH := 640
+        tabH := 680
 
-       g := Gui("+DPIScale -MaximizeBox -MinimizeBox", "OLED Engine")
+       g := Gui("+DPIScale -MaximizeBox -MinimizeBox" (UI_Smooth_Paint ? " +E0x02000000" : ""), "OLED Engine")
         ApplyGuiTheme(g, UI_Dark_Mode)
         g.MarginX := 16
         g.MarginY := 14
@@ -2778,6 +3762,10 @@ OpenSettingsGui(initialTab := 0) {
         tabNames.Push("Browser")
         SettingsTabDefaultBanner[browserTabIdx] := ""
 
+        zonesTabIdx := tabNames.Length + 1
+        tabNames.Push("Zones")
+        SettingsTabDefaultBanner[zonesTabIdx] := ""
+
         careTabIdx := tabNames.Length + 1
         CareTabIdx := careTabIdx
         refreshStInit := GetOledRefreshStatus()
@@ -2792,7 +3780,7 @@ OpenSettingsGui(initialTab := 0) {
         tabNames.Push("Help / About")
         SettingsTabDefaultBanner[aboutTabIdx] := ""
 
-        tabs := g.AddTab3("x16 y14 w660 h" tabH " -Wrap +0x2000", tabNames)
+        tabs := g.AddTab3("x16 y14 w660 h" tabH " -Wrap +0x2000" (UI_Flat_Tabs ? " +0x100" : ""), tabNames)
         tabItemW := Max(72, Min(110, Floor(652 / tabNames.Length)))
         SendMessage(0x1329, 0, tabItemW | (28 << 16), tabs)   ; TCM_SETITEMSIZE
         StyleControlTheme(tabs, UI_Dark_Mode)
@@ -2804,13 +3792,28 @@ OpenSettingsGui(initialTab := 0) {
         dpiScale := A_ScreenDPI / 96
         exactTabW := Max(522, Round(NumGet(rcLastTab, 8, "Int") / dpiScale) + 4)
         tabs.Move(, , exactTabW)
+        if UI_Flat_Tabs {
+            ; Windows draws a square outline around every tab and a frame around the page, outside our rounded pills.
+            ; Clip the control to the union of the pill shapes only, so none of that native drawing can show.
+            ; The page contents are separate sibling controls, so they are unaffected.
+            hRgn := DllCall("gdi32\CreateRectRgn", "Int", 0, "Int", 0, "Int", 0, "Int", 0, "Ptr")
+            Loop tabNames.Length {
+                rci := Buffer(16, 0)
+                SendMessage(0x130A, A_Index - 1, rci, tabs.Hwnd)    ; TCM_GETITEMRECT
+                pillRgn := DllCall("gdi32\CreateRoundRectRgn", "Int", NumGet(rci, 0, "Int") + 2, "Int", NumGet(rci, 4, "Int") + 2
+                    , "Int", NumGet(rci, 8, "Int") - 1, "Int", NumGet(rci, 12, "Int") - 2, "Int", 15, "Int", 15, "Ptr")    ; [tab-line] bottom pulled up 2 px so Windows' own line under each tab is clipped away
+                DllCall("gdi32\CombineRgn", "Ptr", hRgn, "Ptr", hRgn, "Ptr", pillRgn, "Int", 2)    ; RGN_OR
+                DllCall("gdi32\DeleteObject", "Ptr", pillRgn)
+            }
+            DllCall("user32\SetWindowRgn", "Ptr", tabs.Hwnd, "Ptr", hRgn, "Int", 1)    ; Windows owns the region now
+        }
         SetSettingsLayout(exactTabW)
         lay := SettingsLayout
 
         tipDesktopSec  := "Idle delay (in seconds) before dimming or blacking out when on the Windows Desktop, browsing, or using regular apps."
         tipNormGameSec := "Idle delay (in seconds) before dimming or blacking out while playing a standard fullscreen or borderless game."
         tipCompGameSec := "Idle delay (in seconds) before dimming or blacking out while a game in your Competitive Games list is running."
-        tipPausedSec   := "Idle delay (in seconds) before dimming or blacking out when a video player (MPC-HC, Stremio, VLC, mpv, etc.) is paused. Fullscreen/maximized browser videos (such as YouTube) on Monitor 1 do not dim while playing."
+        tipPausedSec   := "Idle delay (in seconds) before dimming or blacking out when a video player (MPC-HC, Stremio, VLC, mpv, etc.) is paused. Fullscreen/maximized browser videos (such as YouTube) on Monitor 1 do not dim while playing, and windowed videos are detected through the display-on request Windows exposes."
         tipDimLevel    := "Controls screen darkness when idle: 0% turns dimming off, while 100% is pure black (#000000) pixel-off blackout."
         tipBlackoutChk := "Quick toggle that sets Dim Level to 100% pure black (#000000) blackout when checked."
         tipFadeSpeed   := "Controls how smoothly the screen fades in and out (in milliseconds). Set to 0 ms for an instant switch."
@@ -2820,10 +3823,11 @@ OpenSettingsGui(initialTab := 0) {
         ; --------------------------------------------------------------------------
         tabs.UseTab(1)
 
-        chkPriAuto := g.AddCheckbox("x" lay.bx " y46 w" (lay.bw - 8) " Checked" Primary_Auto_Enabled, "Auto dim when idle   (turn off = manual dim only)")
+                chkPriAuto := g.AddCheckbox("x" lay.bx " y46 w" (lay.bw - 8 - 170) " Checked" Primary_Auto_Enabled, "Auto dim when idle   (off = manual only)")
         StyleControlTheme(chkPriAuto, UI_Dark_Mode)
         chkPriAuto.SetFont("s9.5 bold " (UI_Dark_Mode ? "cFFFFFF" : "c000000"), "Segoe UI")
         RegisterTip(chkPriAuto, "Master toggle for automatic idle dimming on Monitor 1. When OFF, only manual dim / blackout (hotkey or tray) works and the Dim Level below still applies to it.")
+        ddlPriWake := AddWakeDropdown(g, lay, UI_Dark_Mode, MonitorGetPrimary(), "Monitor 1")
 
         boxHdrMode := AddSectionBox(g, lay.bx, 72, lay.bw, 84, "HDR && Display Mode", UI_Dark_Mode)
         chkHdrSdr := g.AddCheckbox("x" lay.ix " y94 w" lay.colW " Checked" (priHdrInfo.supported && OLED_HDR_SDR_Mode_Enabled), "Separate HDR/SDR profiles")
@@ -2835,6 +3839,7 @@ OpenSettingsGui(initialTab := 0) {
         RegisterTip(chkCompSdr, priHdrInfo.supported ? "Automatically switches Monitor 1 from HDR to SDR when a game from your Competitive Games list launches." : "Monitor 1 does not support HDR.")
 
         swPriHdr := CreateSdrHdrSwitch(g, lay.ix, 122, 98, 24, priIdx, priHdrInfo.supported, liveHdr, true)
+        EnsureHdrSwitchEntry(swPriHdr).masterChk := chkPriAuto
         RegisterTip(swPriHdr, priHdrInfo.supported ? "Click to toggle between SDR and HDR for Monitor 1." : "Monitor 1 does not support HDR.")
 
         txtHdrStatus := g.AddText("x" (lay.ix + 106) " y126 w" (lay.iw - 106) " +0x100", priHdrInfo.supported ? ("Monitor 1 output is " (liveHdr ? "HDR" : "SDR")) : "Monitor 1 does not support HDR")
@@ -2923,9 +3928,11 @@ OpenSettingsGui(initialTab := 0) {
 
         t11 := g.AddText("x" lay.ix " y454 w" lay.dLblW " +0x100", "Fade Speed")
         sldPriFade := g.AddSlider("x" lay.dSldX " y452 w" lay.dSldW " NoTicks ToolTip +AltSubmit Range0-2000", Primary_Fade_Ms)
-        txtPriFade := g.AddText("x" lay.dPctX " y454 w70 +0x100", Primary_Fade_Ms " ms")
+        txtPriFade := g.AddText("x" lay.dPctX " y454 w52 +0x100", Primary_Fade_Ms " ms")
         RegisterTip(t11, tipFadeSpeed)
         RegisterTip(sldPriFade, tipFadeSpeed)
+        chkPriGentle := g.AddCheckbox("x" (lay.dChkX + 2) " y453 w" (lay.dChkW + 8) " Checked" GetGentleDim(priIdx), "Gentle dim")
+        RegisterTip(chkPriGentle, GentleTip("Monitor 1"))
 
         btnTestPri := g.AddButton("x" lay.ix " y490 w132 h26", "Test Dim (3s)")
         RegisterTip(btnTestPri, "Previews Monitor 1's current Dim Level and Fade Speed for 3 seconds.")
@@ -2942,14 +3949,14 @@ OpenSettingsGui(initialTab := 0) {
             txtPriDark.Text := sldPriDark.Value "%",
             chkPriSdrBlk.Value := (sldPriDark.Value = 100) ? 1 : 0,
             (sldPriDark.Value < 100) ? (prevPriSdrVal := sldPriDark.Value) : 0,
-            sldPriDark.Redraw(),
+            SliderRedrawNoErase(sldPriDark),
             MarkSettingsDirty()
         ))
         chkPriSdrBlk.OnEvent("Click", (*) => (
             newVal := chkPriSdrBlk.Value ? 100 : prevPriSdrVal,
             sldPriDark.Value := newVal,
             txtPriDark.Text := newVal "%",
-            sldPriDark.Redraw(),
+            SliderRedrawNoErase(sldPriDark),
             MarkSettingsDirty()
         ))
 
@@ -2957,17 +3964,17 @@ OpenSettingsGui(initialTab := 0) {
             txtPriHdrDark.Text := sldPriHdrDark.Value "%",
             chkPriHdrBlk.Value := (sldPriHdrDark.Value = 100) ? 1 : 0,
             (sldPriHdrDark.Value < 100) ? (prevPriHdrVal := sldPriHdrDark.Value) : 0,
-            sldPriHdrDark.Redraw(),
+            SliderRedrawNoErase(sldPriHdrDark),
             MarkSettingsDirty()
         ))
         chkPriHdrBlk.OnEvent("Click", (*) => (
             newVal := chkPriHdrBlk.Value ? 100 : prevPriHdrVal,
             sldPriHdrDark.Value := newVal,
             txtPriHdrDark.Text := newVal "%",
-            sldPriHdrDark.Redraw(),
+            SliderRedrawNoErase(sldPriHdrDark),
             MarkSettingsDirty()
         ))
-        sldPriFade.OnEvent("Change", (*) => (txtPriFade.Text := sldPriFade.Value " ms", sldPriFade.Redraw(), MarkSettingsDirty()))
+        sldPriFade.OnEvent("Change", (*) => (txtPriFade.Text := sldPriFade.Value " ms", SliderRedrawNoErase(sldPriFade), MarkSettingsDirty()))
 
         hdrOnlyCtrls := [boxHdr, t5, edtHdrDesk, udHdrDesk, t6, edtHdrNorm, udHdrNorm, t7, edtHdrComp, udHdrComp, t8, edtHdrPause, udHdrPause, t10, sldPriHdrDark, txtPriHdrDark, chkPriHdrBlk, priDiv1]
         allMainCtrls := [
@@ -2977,7 +3984,7 @@ OpenSettingsGui(initialTab := 0) {
             boxHdr, t5, edtHdrDesk, udHdrDesk, t6, edtHdrNorm, udHdrNorm,
             t7, edtHdrComp, udHdrComp, t8, edtHdrPause, udHdrPause, boxDim,
             t9, sldPriDark, txtPriDark, chkPriSdrBlk, t10, sldPriHdrDark, txtPriHdrDark, chkPriHdrBlk,
-            t11, sldPriFade, txtPriFade, btnTestPri
+            t11, sldPriFade, txtPriFade, btnTestPri, chkPriGentle
         ]
         if priHdrInfo.supported {
             allMainCtrls.Push(chkHdrSdr)
@@ -2991,7 +3998,7 @@ OpenSettingsGui(initialTab := 0) {
             boxTimers, t1, edtSdrDesk, udSdrDesk, t2, edtSdrNorm, udSdrNorm,
             t3, edtSdrComp, udSdrComp, t4, edtSdrPause, udSdrPause,
             boxHdr, t5, edtHdrDesk, udHdrDesk, t6, edtHdrNorm, udHdrNorm,
-            t7, edtHdrComp, udHdrComp, t8, edtHdrPause, udHdrPause
+            t7, edtHdrComp, udHdrComp, t8, edtHdrPause, udHdrPause, chkPriGentle
         ]
 
         for c in allMainCtrls {
@@ -3034,6 +4041,7 @@ OpenSettingsGui(initialTab := 0) {
                 t11.Move(lay.ix + ox, 454 + oy)
                 sldPriFade.Move(lay.dSldX + ox, 452 + oy, lay.dSldW, 24)
                 txtPriFade.Move(lay.dPctX + ox, 454 + oy)
+                chkPriGentle.Move(lay.dChkX + 2 + ox, 453 + oy)
                 priDiv2.Move(lay.ix + ox, 480 + oy)
                 btnTestPri.Move(lay.ix + ox, 490 + oy)
                 btnResetPri.Move(rstX + ox, 490 + oy)
@@ -3046,6 +4054,7 @@ OpenSettingsGui(initialTab := 0) {
                 t11.Move(lay.ix + ox, 322 + oy)
                 sldPriFade.Move(lay.dSldX + ox, 320 + oy, lay.dSldW, 24)
                 txtPriFade.Move(lay.dPctX + ox, 322 + oy)
+                chkPriGentle.Move(lay.dChkX + 2 + ox, 321 + oy)
                 priDiv2.Move(lay.ix + ox, 348 + oy)
                 btnTestPri.Move(lay.ix + ox, 358 + oy)
                 btnResetPri.Move(rstX + ox, 358 + oy)
@@ -3072,15 +4081,18 @@ OpenSettingsGui(initialTab := 0) {
             chkPriHdrBlk.Value := 1,
             sldPriFade.Value := 350,
             txtPriFade.Text := "350 ms",
+            chkPriGentle.Value := 0,
             SetControlsEnabled(allMainCtrls, true),
             swEntry := EnsureHdrSwitchEntry(swPriHdr, priIdx, priHdrInfo.supported, liveHdr, true),
             UpdateSdrHdrSwitchVisual(swPriHdr, priHdrInfo.supported, IsObject(swEntry) ? swEntry.enabled : liveHdr, true),
             SetControlsEnabled(autoOnlyMain, !!chkPriAuto.Value),
+            SyncHdrSwitchMaster(swPriHdr),
             MarkSettingsDirty()
         ))
 
         syncMainAutoState(*) {
             SetControlsEnabled(autoOnlyMain, !!chkPriAuto.Value)
+            SyncHdrSwitchMaster(swPriHdr)
             MarkSettingsDirty()
         }
         chkHdrSdr.OnEvent("Click", ApplyProfileLayout)
@@ -3088,7 +4100,7 @@ OpenSettingsGui(initialTab := 0) {
 
         ApplyProfileLayout()
         SetControlsEnabled(autoOnlyMain, !!Primary_Auto_Enabled)
-        UpdateSdrHdrSwitchVisual(swPriHdr, priHdrInfo.supported, liveHdr, true)
+        SyncHdrSwitchMaster(swPriHdr)
 
         ; --------------------------------------------------------------------------
         ; OPTIONAL TABS: MONITOR 2, 3, 4, 5+ (IDENTICAL LAYOUT PER CONNECTED MONITOR)
@@ -3292,14 +4304,13 @@ OpenSettingsGui(initialTab := 0) {
         RegisterTip(sldSoundVol, "4-click volume level (1 to 4) for popup, dim, and wake sounds.")
         sldSoundVol.OnEvent("Change", (*) => (
             txtSoundVol.Text := (Max(0, Min(3, Integer(sldSoundVol.Value))) + 1) " / 4",
-            sldSoundVol.Redraw(),
+            SliderRedrawNoErase(sldSoundVol),
             MarkSettingsDirty()
         ))
 
-        AddSectionBox(g, lay.bx, 576, lay.bw, 56, "Taskbar Auto-Hide (OLED Burn-In Protection)", UI_Dark_Mode)
-        chkCareTbar := g.AddCheckbox("x42 y600 w" lay.iw " Checked" Taskbar_AutoHide_Enabled, "Automatically hide the taskbar in Windows")
-        StyleControlTheme(chkCareTbar, UI_Dark_Mode)
-        RegisterTip(chkCareTbar, "Enables or disables Windows' built-in 'Automatically hide the taskbar' setting when you click Apply or Save & Close.")
+                       AddSectionBox(g, lay.bx, 576, lay.bw, 92, "Taskbar (OLED Burn-In Protection)", UI_Dark_Mode)
+        chkCareTbar := TaskbarDimming.BuildCareUI(g, lay, UI_Dark_Mode, 600, Taskbar_AutoHide_Enabled)
+        RegisterTip(chkCareTbar, "Enables or disables Windows' built-in 'Automatically hide the taskbar' setting when you click Apply or Save & Close. Greyed out while 'Dim the taskbar' is on.")
         chkCareTbar.OnEvent("Click", MarkSettingsDirty)
 
         ; --------------------------------------------------------------------------
@@ -3307,25 +4318,30 @@ OpenSettingsGui(initialTab := 0) {
         ; --------------------------------------------------------------------------
         tabs.UseTab(iconsTabIdx)
 
-        AddSectionBox(g, lay.bx, 44, lay.bw, 62, "Theme", UI_Dark_Mode)
-        chkDarkMode := g.AddCheckbox("x42 y68 w130 Checked" UI_Dark_Mode, "Dark Mode")
+                AddSectionBox(g, lay.bx, 44, lay.bw, 62, "Theme", UI_Dark_Mode)
+        chkDarkMode := g.AddCheckbox("x42 y68 w110 Checked" UI_Dark_Mode, "Dark Mode")
         StyleControlTheme(chkDarkMode, UI_Dark_Mode)
         chkDarkMode.OnEvent("Click", (*) => ToggleDarkModeLive(chkDarkMode.Value))
-        btnCustomColor := g.AddButton("x178 y65 w104 h26", "Custom Color...")
-        btnEyedropper  := g.AddButton("x286 y65 w88 h26", "Eyedropper")
-        btnResetColor  := g.AddButton("x378 y65 w52 h26", "Reset")
-        txtColorVal    := g.AddText("x438 y69 w" (lay.ir - 438) " +0x100", (UI_Custom_Color != "") ? ("#" UI_Custom_Color) : "Default theme")
+        btnCustomColor := g.AddButton("x156 y65 w96 h26", "Custom Color...")
+        btnEyedropper  := g.AddButton("x256 y65 w80 h26", "Eyedropper")
+        btnAccent      := g.AddButton("x340 y65 w72 h26", "Accent...")
+        btnResetColor  := g.AddButton("x416 y65 w48 h26", "Reset")
+        txtColorVal    := g.AddText("x472 y69 w" Max(40, lay.ir - 472) " +0x100"
+            , ((UI_Custom_Color != "") ? ("#" UI_Custom_Color) : "Default") " / " ((UI_Accent_Mode = "custom" && UI_Accent_Color != "") ? ("#" UI_Accent_Color) : "Windows"))
         StyleControlTheme(btnCustomColor, UI_Dark_Mode)
         StyleControlTheme(btnEyedropper, UI_Dark_Mode)
+        StyleControlTheme(btnAccent, UI_Dark_Mode)
         StyleControlTheme(btnResetColor, UI_Dark_Mode)
         StyleControlTheme(txtColorVal, UI_Dark_Mode, true)
         btnCustomColor.OnEvent("Click", (*) => PickCustomUiColor())
         btnEyedropper.OnEvent("Click", (*) => StartColorEyedropper())
+        btnAccent.OnEvent("Click", (*) => ShowAccentMenu(btnAccent))
         btnResetColor.OnEvent("Click", (*) => ApplyCustomUiColor(""))
-        RegisterTip(btnCustomColor, "Opens the Windows color picker. Your color becomes the background of the Settings window and pop-ups.")
-        RegisterTip(btnEyedropper, "Sample any pixel color anywhere on your screen. Left-click to pick, Right-click or Esc to cancel.")
+        RegisterTip(btnCustomColor, "Opens the Windows color picker. Your color becomes the background; inputs, dropdowns and text adapt to stay readable.")
+        RegisterTip(btnEyedropper, "Sample any pixel color on your screen as the background. Left-click to pick, Right-click or Esc to cancel.")
+        RegisterTip(btnAccent, "Choose the accent color (sliders, checkboxes, selected tab): follow Windows, or pick your own.")
         RegisterTip(btnResetColor, "Goes back to the plain Dark or Light theme.")
-        RegisterTip(txtColorVal, "The color currently used for the menu and Settings UI.")
+        RegisterTip(txtColorVal, "Background color / accent color currently in use.")
 
         AddSectionBox(g, lay.bx, 112, lay.bw, 56, "Startup", UI_Dark_Mode)
         stW1 := Round(lay.iw * 0.34)
@@ -3349,7 +4365,7 @@ OpenSettingsGui(initialTab := 0) {
         AddSectionBox(g, lay.bx, 174, lay.bw, 144, "Tray Menu Items", UI_Dark_Mode)
         lvColors := (UI_Dark_Mode ? "cFFFFFF" : "c000000") " Background" Format("{:06X}", ThemeSurfaceRgb)
         trayBtnX := lay.ir - 110
-        lvTray := g.AddListView("x42 y196 w" (trayBtnX - 10 - 42) " h112 -Multi NoSortHdr Grid " lvColors, ["State", "Tray Item"])
+        lvTray := g.AddListView("x42 y196 w" (trayBtnX - 10 - 42) " h112 -Multi -HScroll NoSortHdr Grid " lvColors, ["State", "Tray Item"])
         StyleControlTheme(lvTray, UI_Dark_Mode)
 
         btnTrayUp     := g.AddButton("x" trayBtnX " y196 w110 h25", "Move Up")
@@ -3362,13 +4378,13 @@ OpenSettingsGui(initialTab := 0) {
         StyleControlTheme(btnTrayReset, UI_Dark_Mode)
 
         draftTrayItems := CloneTrayItems(TrayMenuItems)
-        refreshTrayListView := (selectRow := 1) => (
+        refreshTrayListView := (selectRow := 0) => (
             lvTray.Delete(),
             PopulateTrayListView(lvTray, draftTrayItems),
             StyleControlTheme(lvTray, UI_Dark_Mode),
-            lvTray.Modify(Max(1, Min(draftTrayItems.Length, selectRow)), "Select Focus")
+            (selectRow >= 1) ? lvTray.Modify(Min(draftTrayItems.Length, selectRow), "Select Focus") : 0    ; no row is selected until the user clicks one
         )
-        refreshTrayListView(1)
+        refreshTrayListView(0)
 
         trayListViewCtrl := lvTray
         trayDraftRef     := draftTrayItems
@@ -3409,7 +4425,7 @@ OpenSettingsGui(initialTab := 0) {
         btnTrayReset.OnEvent("Click", (*) => (
             draftTrayItems := GetDefaultTrayItems(),
             trayDraftRef := draftTrayItems,
-            refreshTrayListView(1),
+            refreshTrayListView(0),
             MarkSettingsDirty()
         ))
 
@@ -3419,11 +4435,15 @@ OpenSettingsGui(initialTab := 0) {
         RegisterTip(edtCompGames, "Comma-separated executable names treated as Competitive Games for longer idle timers and automatic SDR switching.")
         edtCompGames.OnEvent("Change", MarkSettingsDirty)
 
-        AddSectionBox(g, lay.bx, 540, lay.bw, 62, "Never Dim While Running (.exe)", UI_Dark_Mode)
-        edtExcludedProcs := g.AddEdit("x42 y562 w" lay.iw " h32 Multi", Excluded_Processes_List)
+        AddSectionBox(g, lay.bx, 540, lay.bw, 92, "Never Dim Apps (.exe)", UI_Dark_Mode)
+        edtExcludedProcs := g.AddEdit("x42 y562 w" (lay.iw - 98) " h60 Multi", Excluded_Processes_List)
         StyleControlTheme(edtExcludedProcs, UI_Dark_Mode)
-        RegisterTip(edtExcludedProcs, "Comma-separated .exe names (e.g. obs64.exe, Zoom.exe). Automatic dimming/blackout pauses while any listed process is running.")
+        RegisterTip(edtExcludedProcs, "Comma-separated .exe names (e.g. obs64.exe, Zoom.exe). Add :F :M :W :B :N after a name to limit when it counts (F=Fullscreen, M=Maximized, W=Windowed, B=Background, N=Minimized/tray), e.g. game.exe:F. Use :- to switch a rule off. Use the Choose button for a visual picker.")
         edtExcludedProcs.OnEvent("Change", MarkSettingsDirty)
+        btnNeverDimPick := g.AddButton("x" (lay.ir - 90) " y562 w90 h30", "Choose...")
+        StyleControlTheme(btnNeverDimPick, UI_Dark_Mode)
+        RegisterTip(btnNeverDimPick, "Pick running apps and choose when each one keeps the screen from dimming.")
+        btnNeverDimPick.OnEvent("Click", (*) => NeverDim.Open(edtExcludedProcs))
 
         boxMediaBrowsers := AddSectionBox(g, lay.bx, 416, lay.bw, 118, "Video Players && Browsers (.exe)", UI_Dark_Mode)
         tipMediaBrowsers := "Tells OLED Engine which apps count as 'watching a video', so the screen isn't dimmed while you watch.`n`n"
@@ -3443,10 +4463,10 @@ OpenSettingsGui(initialTab := 0) {
         edtMediaPlayers.OnEvent("Change", MarkSettingsDirty)
         edtBrowsers.OnEvent("Change", MarkSettingsDirty)
 
-        tBackupLbl := g.AddText("x42 y613 w120 +0x100", "Settings Backup")
-        btnOpenCfg    := g.AddButton("x170 y608 w140 h26", "Open Config Folder")
-        btnBackupNow  := g.AddButton("x316 y608 w110 h26", "Back Up Now")
-        btnRestoreBak := g.AddButton("x432 y608 w130 h26", "Restore Backup...")
+        tBackupLbl := g.AddText("x42 y643 w120 +0x100", "Settings Backup")
+        btnOpenCfg    := g.AddButton("x170 y638 w140 h26", "Open Config Folder")
+        btnBackupNow  := g.AddButton("x316 y638 w110 h26", "Back Up Now")
+        btnRestoreBak := g.AddButton("x432 y638 w130 h26", "Restore Backup...")
         StyleControlTheme(tBackupLbl, UI_Dark_Mode, true)
         StyleControlTheme(btnOpenCfg, UI_Dark_Mode)
         StyleControlTheme(btnBackupNow, UI_Dark_Mode)
@@ -3579,18 +4599,46 @@ OpenSettingsGui(initialTab := 0) {
             hkY += 70
         }
 
+        ; --- Utility hotkeys: empty = predefined default ---
+        UtilityHkCtrls.Clear()
+        boxUtil := AddSectionBox(g, lay.bx, hkY, lay.bw, 28 + 3 * 34 + 26, "Utility Hotkeys", UI_Dark_Mode)
+        utilY := hkY + 28
+        for utilItem in [["CursorRestore", "Restore Cursor", "Left Ctrl+Left Alt+C"]
+                       , ["Diagnostics", "Diagnostic Report", "Left Ctrl+Left Alt+H"]
+                       , ["DevReload", "Reload Script", "Left Ctrl+Left Alt+R"]] {
+            lblU := g.AddText("x42 y" (utilY + 3) " w144 +0x100", utilItem[2])
+            hkU := g.AddHotkey("x192 y" utilY " w" hkW, GetUtilityHotkeyVar(utilItem[1]))
+            btnU := g.AddButton("x" (192 + hkW + 8) " y" (utilY - 1) " w66 h24", "Clear")
+            StyleControlTheme(lblU, UI_Dark_Mode)
+            StyleControlTheme(hkU, UI_Dark_Mode)
+            StyleControlTheme(btnU, UI_Dark_Mode)
+            RegisterTip(lblU, "Custom shortcut for " utilItem[2] ". Leave empty to use the default (" utilItem[3] ").")
+            RegisterTip(hkU, "Custom shortcut for " utilItem[2] ". Leave empty to use the default (" utilItem[3] ").")
+            hkU.OnEvent("Change", MarkSettingsDirty)
+            btnU.OnEvent("Click", MakeClearHotkeyCallback(hkU))
+            AddUtilityHkCtrl(utilItem[1], hkU)
+            utilY += 34
+        }
+        txtUtilHint := g.AddText("x42 y" (utilY + 2) " w" lay.iw " +0x100", "Empty = default (Left Ctrl + Left Alt + C / H / R). Right Alt / AltGr is never used.")
+        StyleControlTheme(txtUtilHint, UI_Dark_Mode, true)
+        hkY += 28 + 3 * 34 + 26 + 8
+
         btnResetHk := g.AddButton("x28 y" (hkY + 6) " w116 h26", "Reset Defaults")
         StyleControlTheme(btnResetHk, UI_Dark_Mode)
         btnResetHk.OnEvent("Click", (*) => (
-            ResetHotkeyControlsToDefault(hkControlsMap),
+              ResetHotkeyControlsToDefault(hkControlsMap),
+            ResetUtilityHotkeyControls(),
             MarkSettingsDirty()
         ))
 
         tabs.UseTab(presetsTabIdx)
         BuildPresetsTab(g, UI_Dark_Mode, presetsTabIdx)
 
-        tabs.UseTab(browserTabIdx)
-        BuildBrowserTab(g, UI_Dark_Mode)
+      tabs.UseTab(browserTabIdx)
+        BuildBrowserTab(g, UI_Dark_Mode, browserTabIdx, tabs)
+
+        tabs.UseTab(zonesTabIdx)
+        PanelZones.BuildTab(g, UI_Dark_Mode)
 
         preAutoHwnds := Map()
         for preAutoCtl in g {
@@ -3636,8 +4684,13 @@ OpenSettingsGui(initialTab := 0) {
         txtAboutAuthor := g.AddText("x" lay.ix " y" (aboutY + 50) " w" (lay.iw - 340) " h24 +0x100", "Created by dxrksin")
         StyleControlTheme(txtAboutAuthor, UI_Dark_Mode)
         txtAboutAuthor.SetFont("s9.5 bold " (UI_Dark_Mode ? "c6EE7B7" : "c1D4ED8"), "Segoe UI")
+        txtAboutAuthor.Move(, , 128)
+        btnDonate := g.AddButton("x" (lay.ix + 134) " y" (aboutY + 48) " w150 h26", "☕  Support on Ko-fi")
+        StyleControlTheme(btnDonate, UI_Dark_Mode)
+        RegisterTip(btnDonate, "OLED Engine is free. If it saves your screens and you want to say thanks, you can buy me a coffee on Ko-fi. Totally optional, and it opens in your browser.")
+        btnDonate.OnEvent("Click", (*) => Run(DONATE_URL))
 
-        txtAboutDesc := g.AddText("x" lay.ix " y" (aboutY + 78) " w" lay.iw " +0x100", "Multi-monitor OLED burn-in protection, per-category idle dimming and #000000 blackout, HDR/SDR profile switching, pixel refresh tracking, and game automation.")
+        txtAboutDesc := g.AddText("x" lay.ix " y" (aboutY + 78) " w" lay.iw " +0x100", "Multi-monitor OLED burn-in protection for Windows: per-category idle dimming and #000000 blackout, smart browser toolbar dimming, HDR/SDR profile switching, pixel refresh tracking, and game automation.")
         StyleControlTheme(txtAboutDesc, UI_Dark_Mode, true)
         txtAboutDesc.GetPos(, , , &aboutDescH)
         aboutBoxH := 78 + aboutDescH + 14
@@ -3645,19 +4698,9 @@ OpenSettingsGui(initialTab := 0) {
         aboutY += aboutBoxH + 8
 
         logEditH := 220
-         boxLog := AddSectionBox(g, lay.bx, aboutY, lay.bw, 24 + logEditH + 14, "", UI_Dark_Mode)
-                        logTitleText := "What's New (v" APP_VERSION ")  -  click to expand ↗"
-        txtLogTitle := g.AddText("x" (lay.bx + 10) " y" (aboutY - 2) " w340 h20 +0x100", logTitleText)
-        txtLogTitle.SetFont("s9.5 bold " (UI_Dark_Mode ? "cFFFFFF" : "c000000"), "Segoe UI")
-        ; Shrink the label to exactly the width of its bold text so no gap is cut into the box border
-        hdcT := DllCall("GetDC", "Ptr", txtLogTitle.Hwnd, "Ptr")
-        hfT := SendMessage(0x31, 0, 0, txtLogTitle.Hwnd)          ; WM_GETFONT
-        oldT := DllCall("SelectObject", "Ptr", hdcT, "Ptr", hfT, "Ptr")
-        szT := Buffer(8, 0)
-        DllCall("GetTextExtentPoint32W", "Ptr", hdcT, "Str", logTitleText, "Int", StrLen(logTitleText), "Ptr", szT)
-        DllCall("SelectObject", "Ptr", hdcT, "Ptr", oldT)
-        DllCall("ReleaseDC", "Ptr", txtLogTitle.Hwnd, "Ptr", hdcT)
-        txtLogTitle.Move(, , Round(NumGet(szT, 0, "Int") / dpiScale) + 6)
+               logTitleText := "What's New (v" APP_VERSION ")  -  click to expand ↗"
+        boxLog := AddSectionBox(g, lay.bx, aboutY, lay.bw, 24 + logEditH + 14, logTitleText, UI_Dark_Mode)
+        txtLogTitle := boxLog.title
         changelogEntries := [
             ["Version", "1.2.0"],
             ["New", "Browser Toolbar Dimming: Integrated smart auto-dimming and blackout for browser toolbars across all major browsers, supporting fullscreen/maximized windows, any resolution, and both horizontal and vertical monitors."],
@@ -3709,7 +4752,7 @@ OpenSettingsGui(initialTab := 0) {
 
         boxCrash := AddSectionBox(g, lay.bx, aboutY, lay.bw, 100, "Silent Crash && State Diagnostics", UI_Dark_Mode)
         aboutLater.Push(boxCrash)
-        txtErrInfo := g.AddText("x" lay.ix " y" (aboutY + 24) " w" lay.iw " +0x100", "Unexpected errors are captured quietly in logs\errors.log alongside the last " RING_LOG_MAX " RAM RingLog events without interrupting popups.")
+        txtErrInfo := g.AddText("x" lay.ix " y" (aboutY + 24) " w" lay.iw " +0x100", "Unexpected errors are captured quietly in logs\errors.log, with the last " RING_LOG_MAX " events leading up to each one, and never interrupt you with popups. Newest entries are always at the top.")
         StyleControlTheme(txtErrInfo, UI_Dark_Mode, true)
         txtErrInfo.GetPos(, , , &errInfoH)
         aboutLater.Push(txtErrInfo)
@@ -3758,7 +4801,9 @@ OpenSettingsGui(initialTab := 0) {
         SettingsHintCtrl := hintBar
         SetStatusBannerText(GetDefaultBannerForTab(startTab))
 
+        tabs.OnNotify(-552, TabSelChanging)    ; TCN_SELCHANGING
         tabs.OnEvent("Change", (*) => (
+            StartTabPill(SettingsActiveTab, tabs.Value),
             SettingsActiveTab := tabs.Value,
             SetStatusBannerText(GetDefaultBannerForTab(tabs.Value))
         ))
@@ -3775,9 +4820,14 @@ OpenSettingsGui(initialTab := 0) {
         StyleControlTheme(btnQuit, UI_Dark_Mode)
         SettingsApplyBtn := btnApply
 
-        collectAndApply := (closeAfter) => (
+          collectAndApply := (closeAfter) => (
             SetSoundSelections(ddlDimSound.Text, ddlWakeSound.Text),
+            SetWakeMode(MonitorGetPrimary(), ddlPriWake.Value),
+            SetGentleDim(MonitorGetPrimary(), chkPriGentle.Value),
             CommitBrowserTab(),
+            ZoneDimming.ApplyAndSave(),
+            PanelZones.ApplyAndSave(),
+            TaskbarDimming.ApplyAndSave(),
             CommitSettingsFromGui(
                 closeAfter,
                 chkDarkMode.Value, chkDebugLog.Value, edtDbgLogPath.Value,
@@ -3797,19 +4847,20 @@ OpenSettingsGui(initialTab := 0) {
 
         btnApply.OnEvent("Click", (*) => collectAndApply(false))
         btnSave.OnEvent("Click", (*) => collectAndApply(true))
-        btnQuit.OnEvent("Click", CloseSettingsGui)
-        g.OnEvent("Close", CloseSettingsGui)
-        g.OnEvent("Escape", CloseSettingsGui)
+        btnQuit.OnEvent("Click", CloseSettingsGuiFaded)
+        g.OnEvent("Close", CloseSettingsGuiFaded)
+        g.OnEvent("Escape", CloseSettingsGuiFaded)
 
         SettingsGui := g
-        SetTimer(SyncLiveHdrIndicators, 750)
+        SetTimer(SyncLiveHdrIndicators, 1500)
         SetTimer(SyncLiveStatusBoxes, 500)
         SetTimer(PollHoverTooltip, 80)
         SyncSettingsLiveRefreshTimer()
         SetTimer(SyncSettingsLiveRefreshTimer, 1000)
-        ShowWithFade(g, "AutoSize Center")
+        ShowWithFade(g, "AutoSize Center", 70)
     } finally {
         isOpeningSettingsGui := false
+        try ProcessSetPriority("BelowNormal")
     }
 }
 
@@ -3843,10 +4894,11 @@ BuildExtraMonitorTab(g, tabs, tabIdx, mIdx, darkMode) {
     hdrDimInit   := GetExtraMonSetting(mIdx, "HdrDimPercent")
     fadeMsInit   := GetExtraMonSetting(mIdx, "FadeMs")
 
-    chkAuto := g.AddCheckbox("x" lay.bx " y46 w" (lay.bw - 8) " Checked" autoInit, "Auto dim " monLabel " when idle   (turn off = manual dim only)")
+         chkAuto := g.AddCheckbox("x" lay.bx " y46 w" (lay.bw - 8 - 170) " Checked" autoInit, "Auto dim " monLabel " when idle   (off = manual only)")
     StyleControlTheme(chkAuto, darkMode)
     chkAuto.SetFont("s9.5 bold " (darkMode ? "cFFFFFF" : "c000000"), "Segoe UI")
     RegisterTip(chkAuto, "Master toggle for automatic idle dimming on " monLabel ". When OFF, only manual dim / blackout (hotkey or tray) works and the Dim Level below still applies to it.")
+    ddlWake := AddWakeDropdown(g, lay, darkMode, mIdx, monLabel)
 
     boxHdrMode := AddSectionBox(g, lay.bx, 72, lay.bw, 84, "HDR && Display Mode", darkMode)
     chkHdrSdr := g.AddCheckbox("x" lay.ix " y94 w" lay.colW " Checked" hdrSdrInit, "Separate HDR/SDR profiles")
@@ -3858,6 +4910,7 @@ BuildExtraMonitorTab(g, tabs, tabIdx, mIdx, darkMode) {
     RegisterTip(chkCompSdr, mHdr.supported ? ("Automatically switches " monLabel " from HDR to SDR when a competitive game launches.") : (monLabel " does not support HDR."))
 
     swMon := CreateSdrHdrSwitch(g, lay.ix, 122, 98, 24, mIdx, mHdr.supported, mHdr.enabled, true)
+    EnsureHdrSwitchEntry(swMon).masterChk := chkAuto
     RegisterTip(swMon, mHdr.supported ? ("Click to toggle between SDR and HDR for " monLabel ".") : (monLabel " does not support HDR."))
 
     statusStr := mHdr.supported ? (monLabel " output is " (mHdr.enabled ? "HDR" : "SDR")) : (monLabel " does not support HDR")
@@ -3945,9 +4998,11 @@ BuildExtraMonitorTab(g, tabs, tabIdx, mIdx, darkMode) {
 
     t11 := g.AddText("x" lay.ix " y454 w" lay.dLblW " +0x100", "Fade Speed")
     sldFade := g.AddSlider("x" lay.dSldX " y452 w" lay.dSldW " NoTicks ToolTip +AltSubmit Range0-2000", fadeMsInit)
-    txtFade := g.AddText("x" lay.dPctX " y454 w70 +0x100", fadeMsInit " ms")
+    txtFade := g.AddText("x" lay.dPctX " y454 w52 +0x100", fadeMsInit " ms")
     RegisterTip(t11, tipFadeSpeed)
     RegisterTip(sldFade, tipFadeSpeed)
+    chkGentle := g.AddCheckbox("x" (lay.dChkX + 2) " y453 w" (lay.dChkW + 8) " Checked" GetGentleDim(mIdx), "Gentle dim")
+    RegisterTip(chkGentle, GentleTip(monLabel))
 
     btnTest := g.AddButton("x" lay.ix " y490 w132 h26", "Test Dim (3s)")
     RegisterTip(btnTest, "Previews " monLabel "'s current Dim Level and Fade Speed for 3 seconds.")
@@ -3964,14 +5019,14 @@ BuildExtraMonitorTab(g, tabs, tabIdx, mIdx, darkMode) {
         txtDark.Text := sldDark.Value "%",
         chkBlk.Value := (sldDark.Value = 100) ? 1 : 0,
         (sldDark.Value < 100) ? (prevSdrVal := sldDark.Value) : 0,
-        sldDark.Redraw(),
+        SliderRedrawNoErase(sldDark),
         MarkSettingsDirty()
     ))
     chkBlk.OnEvent("Click", (*) => (
         newVal := chkBlk.Value ? 100 : prevSdrVal,
         sldDark.Value := newVal,
         txtDark.Text := newVal "%",
-        sldDark.Redraw(),
+        SliderRedrawNoErase(sldDark),
         MarkSettingsDirty()
     ))
 
@@ -3979,17 +5034,17 @@ BuildExtraMonitorTab(g, tabs, tabIdx, mIdx, darkMode) {
         txtHdrDark.Text := sldHdrDark.Value "%",
         chkHdrBlk.Value := (sldHdrDark.Value = 100) ? 1 : 0,
         (sldHdrDark.Value < 100) ? (prevHdrVal := sldHdrDark.Value) : 0,
-        sldHdrDark.Redraw(),
+        SliderRedrawNoErase(sldHdrDark),
         MarkSettingsDirty()
     ))
     chkHdrBlk.OnEvent("Click", (*) => (
         newVal := chkHdrBlk.Value ? 100 : prevHdrVal,
         sldHdrDark.Value := newVal,
         txtHdrDark.Text := newVal "%",
-        sldHdrDark.Redraw(),
+        SliderRedrawNoErase(sldHdrDark),
         MarkSettingsDirty()
     ))
-    sldFade.OnEvent("Change", (*) => (txtFade.Text := sldFade.Value " ms", sldFade.Redraw(), MarkSettingsDirty()))
+    sldFade.OnEvent("Change", (*) => (txtFade.Text := sldFade.Value " ms", SliderRedrawNoErase(sldFade), MarkSettingsDirty()))
 
     hdrOnlyCtrls := [boxHdr, t5, edtHdrDesk, udHdrDesk, t6, edtHdrNorm, udHdrNorm, t7, edtHdrComp, udHdrComp, t8, edtHdrPause, udHdrPause, t10, sldHdrDark, txtHdrDark, chkHdrBlk, div1]
     allCtrls := [
@@ -3999,7 +5054,7 @@ BuildExtraMonitorTab(g, tabs, tabIdx, mIdx, darkMode) {
         boxHdr, t5, edtHdrDesk, udHdrDesk, t6, edtHdrNorm, udHdrNorm,
         t7, edtHdrComp, udHdrComp, t8, edtHdrPause, udHdrPause, boxDim,
         t9, sldDark, txtDark, chkBlk, t10, sldHdrDark, txtHdrDark, chkHdrBlk,
-        t11, sldFade, txtFade, btnTest
+        t11, sldFade, txtFade, btnTest, chkGentle
     ]
     if mHdr.supported {
         allCtrls.Push(chkHdrSdr)
@@ -4012,7 +5067,7 @@ BuildExtraMonitorTab(g, tabs, tabIdx, mIdx, darkMode) {
         boxTimers, t1, edtSdrDesk, udSdrDesk, t2, edtSdrNorm, udSdrNorm,
         t3, edtSdrComp, udSdrComp, t4, edtSdrPause, udSdrPause,
         boxHdr, t5, edtHdrDesk, udHdrDesk, t6, edtHdrNorm, udHdrNorm,
-        t7, edtHdrComp, udHdrComp, t8, edtHdrPause, udHdrPause
+        t7, edtHdrComp, udHdrComp, t8, edtHdrPause, udHdrPause, chkGentle
     ]
 
     for c in allCtrls {
@@ -4043,12 +5098,12 @@ BuildExtraMonitorTab(g, tabs, tabIdx, mIdx, darkMode) {
             boxDim.Move(lay.bx + ox, 364 + oy, lay.bw, 166)
             t9.Move(lay.ix + ox, 390 + oy), sldDark.Move(lay.dSldX + ox, 388 + oy, lay.dSldW, 24), txtDark.Move(lay.dPctX + ox, 390 + oy), chkBlk.Move(lay.dChkX + ox, 389 + oy)
             t10.Move(lay.ix + ox, 422 + oy), sldHdrDark.Move(lay.dSldX + ox, 420 + oy, lay.dSldW, 24), txtHdrDark.Move(lay.dPctX + ox, 422 + oy), chkHdrBlk.Move(lay.dChkX + ox, 421 + oy)
-            div1.Move(lay.ix + ox, 446 + oy), t11.Move(lay.ix + ox, 454 + oy), sldFade.Move(lay.dSldX + ox, 452 + oy, lay.dSldW, 24), txtFade.Move(lay.dPctX + ox, 454 + oy)
+            div1.Move(lay.ix + ox, 446 + oy), t11.Move(lay.ix + ox, 454 + oy), sldFade.Move(lay.dSldX + ox, 452 + oy, lay.dSldW, 24), txtFade.Move(lay.dPctX + ox, 454 + oy), chkGentle.Move(lay.dChkX + 2 + ox, 453 + oy)
             div2.Move(lay.ix + ox, 480 + oy), btnTest.Move(lay.ix + ox, 490 + oy), btnReset.Move(rstX + ox, 490 + oy)
         } else {
             boxDim.Move(lay.bx + ox, 264 + oy, lay.bw, 134)
             t9.Move(lay.ix + ox, 290 + oy), sldDark.Move(lay.dSldX + ox, 288 + oy, lay.dSldW, 24), txtDark.Move(lay.dPctX + ox, 290 + oy), chkBlk.Move(lay.dChkX + ox, 289 + oy)
-            t11.Move(lay.ix + ox, 322 + oy), sldFade.Move(lay.dSldX + ox, 320 + oy, lay.dSldW, 24), txtFade.Move(lay.dPctX + ox, 322 + oy)
+            t11.Move(lay.ix + ox, 322 + oy), sldFade.Move(lay.dSldX + ox, 320 + oy, lay.dSldW, 24), txtFade.Move(lay.dPctX + ox, 322 + oy), chkGentle.Move(lay.dChkX + 2 + ox, 321 + oy)
             div2.Move(lay.ix + ox, 348 + oy), btnTest.Move(lay.ix + ox, 358 + oy), btnReset.Move(rstX + ox, 358 + oy)
         }
         DllCall("SendMessage", "Ptr", g.Hwnd, "UInt", 0x000B, "Ptr", 1, "Ptr", 0)
@@ -4064,26 +5119,27 @@ BuildExtraMonitorTab(g, tabs, tabIdx, mIdx, darkMode) {
         udHdrDesk.Value := 15, udHdrNorm.Value := 5, udHdrComp.Value := 5, udHdrPause.Value := 10,
         sldDark.Value := 73, txtDark.Text := "73%", chkBlk.Value := 0,
         sldHdrDark.Value := 73, txtHdrDark.Text := "73%", chkHdrBlk.Value := 0,
-        sldFade.Value := 300, txtFade.Text := "300 ms",
+        sldFade.Value := 300, txtFade.Text := "300 ms", chkGentle.Value := 0,
         SetControlsEnabled(allCtrls, true),
        curInfo := GetMonitorHdrInfo(mIdx),
         UpdateSdrHdrSwitchVisual(swMon, curInfo.supported, curInfo.enabled, true),
         SetControlsEnabled(autoOnlyCtrls, !!chkAuto.Value),
+        SyncHdrSwitchMaster(swMon),
         MarkSettingsDirty()
     ))
 
     chkHdrSdr.OnEvent("Click", applyLayout)
-    chkAuto.OnEvent("Click", (*) => (SetControlsEnabled(autoOnlyCtrls, !!chkAuto.Value), MarkSettingsDirty()))
+    chkAuto.OnEvent("Click", (*) => (SetControlsEnabled(autoOnlyCtrls, !!chkAuto.Value), SyncHdrSwitchMaster(swMon), MarkSettingsDirty()))
 
     applyLayout()
     SetControlsEnabled(autoOnlyCtrls, !!autoInit)
-    UpdateSdrHdrSwitchVisual(swMon, mHdr.supported, mHdr.enabled, true)
+    SyncHdrSwitchMaster(swMon)
 
     return {
-        chkAuto: chkAuto, chkHdrSdr: chkHdrSdr, chkCompSdr: chkCompSdr,
+        chkAuto: chkAuto, ddlWake: ddlWake, chkHdrSdr: chkHdrSdr, chkCompSdr: chkCompSdr,
         edtSdrDesk: edtSdrDesk, edtSdrNorm: edtSdrNorm, edtSdrComp: edtSdrComp, edtSdrPause: edtSdrPause,
         edtHdrDesk: edtHdrDesk, edtHdrNorm: edtHdrNorm, edtHdrComp: edtHdrComp, edtHdrPause: edtHdrPause,
-        sldDark: sldDark, sldHdrDark: sldHdrDark, sldFade: sldFade
+        sldDark: sldDark, sldHdrDark: sldHdrDark, sldFade: sldFade, chkGentle: chkGentle
     }
 }
 
@@ -4331,6 +5387,9 @@ LoadSettingsFromIni() {
     global Desktop_Hide_Enabled, Desktop_Idle_Sec, Icon_Fade_Ms
     global Start_With_Windows, Start_Minimized, Care_Taskbar_AutoHide
 
+    LoadWakeModes()
+    LoadGentleDims()
+
     if !FileExist(IniPath) {
         SaveSettingsToIni()
         return
@@ -4405,6 +5464,9 @@ SaveSettingsToIni() {
     global Start_With_Windows, Start_Minimized, Care_Taskbar_AutoHide
 
     DirCreate(ConfigDir)
+   
+    SaveWakeModes()
+    SaveGentleDims()
 
     IniWrite((IsSet(Primary_Auto_Enabled) && Primary_Auto_Enabled) ? 1 : 0, IniPath, "Monitor1", "Auto")
     IniWrite((IsSet(HDR_SDR_Mode_Enabled) && HDR_SDR_Mode_Enabled) ? 1 : 0, IniPath, "Monitor1", "HdrSdrMode")
@@ -4472,7 +5534,9 @@ LoadAppSettingsFromIni() {
     global Primary_HDR_Desktop_Sec, Primary_HDR_Normal_Sec, Primary_HDR_Comp_Sec, Primary_HDR_Paused_Sec
     global OLED_Refresh_Reminder_Days, OLED_Refresh_Reminder_Hours, OLED_Refresh_Reminder_Minutes
     global OLED_Refresh_Popup_Monitor, OLED_Refresh_Alert_Style, OLED_Refresh_Popup_Sound
-    global Dim_Sound_Name, Wake_Sound_Name, UI_Custom_Color
+    global Dim_Sound_Name, Wake_Sound_Name, UI_Custom_Color, UI_Accent_Mode, UI_Accent_Color
+    UI_Accent_Mode              := IniRead(IniPath, "App", "AccentMode", UI_Accent_Mode)
+    UI_Accent_Color             := IniRead(IniPath, "App", "AccentColor", UI_Accent_Color)
     global Comp_Games_List, Excluded_Processes_List, Media_Players_List, Browsers_List, Tray_Menu_Config
     global Mon1_Hotkey, Mon2_Hotkey, Mon3_Hotkey, Mon4_Hotkey, Mon5_Hotkey
 
@@ -4516,6 +5580,9 @@ LoadAppSettingsFromIni() {
     Mon3_Hotkey                 := IniRead(IniPath, "App", "Mon3Hotkey", Mon3_Hotkey)
     Mon4_Hotkey                 := IniRead(IniPath, "App", "Mon4Hotkey", Mon4_Hotkey)
     Mon5_Hotkey                 := IniRead(IniPath, "App", "Mon5Hotkey", Mon5_Hotkey)
+    Util_CursorRestore_Hotkey   := IniRead(IniPath, "App", "UtilCursorRestoreHotkey", Util_CursorRestore_Hotkey)
+    Util_Diagnostics_Hotkey     := IniRead(IniPath, "App", "UtilDiagnosticsHotkey", Util_Diagnostics_Hotkey)
+    Util_DevReload_Hotkey       := IniRead(IniPath, "App", "UtilDevReloadHotkey", Util_DevReload_Hotkey)
 }
 
 SaveAppSettingsToIni() {
@@ -4526,9 +5593,12 @@ SaveAppSettingsToIni() {
     global Primary_HDR_Desktop_Sec, Primary_HDR_Normal_Sec, Primary_HDR_Comp_Sec, Primary_HDR_Paused_Sec
     global OLED_Refresh_Reminder_Days, OLED_Refresh_Reminder_Hours, OLED_Refresh_Reminder_Minutes
     global OLED_Refresh_Popup_Monitor, OLED_Refresh_Alert_Style, OLED_Refresh_Popup_Sound
-    global Dim_Sound_Name, Wake_Sound_Name, UI_Custom_Color
+    global Dim_Sound_Name, Wake_Sound_Name, UI_Custom_Color, UI_Accent_Mode
+    IniWrite(UI_Accent_Mode,   IniPath, "App", "AccentMode")
+    IniWrite(UI_Accent_Color,  IniPath, "App", "AccentColor")
     global Comp_Games_List, Excluded_Processes_List, Media_Players_List, Browsers_List, Tray_Menu_Config
     global Mon1_Hotkey, Mon2_Hotkey, Mon3_Hotkey, Mon4_Hotkey, Mon5_Hotkey
+    global Util_CursorRestore_Hotkey, Util_Diagnostics_Hotkey, Util_DevReload_Hotkey
 
     IniWrite(OLED_HDR_SDR_Mode_Enabled ? 1 : 0,  IniPath, "App", "HdrSdrMode")
     IniWrite(Comp_Game_Auto_SDR_Enabled ? 1 : 0, IniPath, "App", "CompAutoSdr")
@@ -4566,6 +5636,9 @@ SaveAppSettingsToIni() {
     IniWrite(Mon3_Hotkey, IniPath, "App", "Mon3Hotkey")
     IniWrite(Mon4_Hotkey, IniPath, "App", "Mon4Hotkey")
     IniWrite(Mon5_Hotkey, IniPath, "App", "Mon5Hotkey")
+    IniWrite(Util_CursorRestore_Hotkey, IniPath, "App", "UtilCursorRestoreHotkey")
+    IniWrite(Util_Diagnostics_Hotkey,   IniPath, "App", "UtilDiagnosticsHotkey")
+    IniWrite(Util_DevReload_Hotkey,     IniPath, "App", "UtilDevReloadHotkey")
 }
 
 GetEffectiveExtraMonDimPercent(monIdx) {
@@ -4657,7 +5730,7 @@ PopulateTrayListView(lv, items) {
         lv.Add("", item.enabled ? "Keep" : "Hidden", GetTrayItemDisplayName(item.id))
     }
     lv.ModifyCol(1, 74)
-    lv.ModifyCol(2, 266)
+    lv.ModifyCol(2, "AutoHdr")    ; last column fills the table: no empty strip on the right
 }
 
 HitTestTrayListViewRow() {
@@ -4725,7 +5798,12 @@ OnLvBeginDrag(lvCtrl, lParam) {
 }
 
 OnMouseMoveMsg(wParam, lParam, msg, hwnd) {
-    global isDraggingTrayRow
+    global isDraggingTrayRow, SettingsTabsCtrl
+    try {
+        if (IsObject(SettingsTabsCtrl) && hwnd = SettingsTabsCtrl.Hwnd) {
+            StartTabHoverAnim()
+        }
+    }
     if !isDraggingTrayRow {
         return
     }
@@ -4790,28 +5868,70 @@ ApplyCustomUiColor(hex) {
 }
 
 ; Rebuilds the palette and refreshes every open window, the tray menu and the saved settings
+; Deferred so it never runs inside the eyedropper timer / color menu callback
 ReapplyUiTheme() {
+    global ThemeReapplyPending
+    if ThemeReapplyPending {
+        return
+    }
+    ThemeReapplyPending := true
+    SetTimer(DoReapplyUiTheme, -40)
+}
+
+DoReapplyUiTheme() {
     global UI_Dark_Mode, SettingsGui, SettingsTabsCtrl, StatsPromptGui, RefreshPromptGui
-    savedTab := 1
-    if IsObject(SettingsTabsCtrl) {
-        try savedTab := SettingsTabsCtrl.Value
+    global ThemeRebuilding, ThemeReapplyPending, SectionBoxTitles
+    ThemeReapplyPending := false
+    ThemeRebuilding := true
+    try {
+        savedTab := 1
+        if IsObject(SettingsTabsCtrl) {
+            try savedTab := SettingsTabsCtrl.Value
+        }
+        RefreshThemeColors()
+        ApplyMenuTheme(UI_Dark_Mode)
+              ApplyTrayMenuColor()
+        SetupTrayMenu()
+        try SaveSettingsToScript()
+        catch as saveErr
+            DebugLogEvent("Theme save failed: " saveErr.Message " (line " saveErr.Line ")", "ERROR")
+
+        ; drop section-box entries whose windows no longer exist
+        dead := []
+        for h, _ in SectionBoxTitles {
+            if !DllCall("IsWindow", "Ptr", h) {
+                dead.Push(h)
+            }
+        }
+        for h in dead {
+            SectionBoxTitles.Delete(h)
+        }
+
+        if IsObject(SettingsGui) {
+            CloseSettingsGui()
+            OpenSettingsGui(savedTab)
+        }
+        if IsObject(StatsPromptGui) {
+            CloseStatsPromptGui()
+            ShowOledCareStatus()
+        }
+        if IsObject(RefreshPromptGui) {
+            CloseRefreshPromptGui()
+            ShowRefreshReminderPopup()
+        }
+    } catch as e {
+        try DebugLogEvent("Theme rebuild failed: " e.Message " (line " e.Line ")", "ERROR")
+    } finally {
+        ThemeRebuilding := false
     }
-    RefreshThemeColors()
-    ApplyMenuTheme(UI_Dark_Mode)
-    ApplyTrayMenuColor()
-    SetupTrayMenu()
-    SaveSettingsToScript()
+    SetTimer(RepaintThemedWindows, -80)
+    SetTimer(() => RepaintThemedWindows(), -350)
+}
+
+RepaintThemedWindows() {
+    global SettingsGui
     if IsObject(SettingsGui) {
-        CloseSettingsGui()
-        OpenSettingsGui(savedTab)
-    }
-    if IsObject(StatsPromptGui) {
-        CloseStatsPromptGui()
-        ShowOledCareStatus()
-    }
-    if IsObject(RefreshPromptGui) {
-        CloseRefreshPromptGui()
-        ShowRefreshReminderPopup()
+        try ForceFullRepaint(SettingsGui.Hwnd, false)
     }
 }
 
@@ -4894,10 +6014,22 @@ StartColorEyedropper(onPickedCallback := "") {
     pickedCb := onPickedCallback
     SetEyedropperSystemCursor(true)
 
-    tickFn := (*) => (
-        (!active) ? 0 : EyedropperStep(&active, &waitRelease, &lastHex, &pickedCb, tickFn)
-    )
-    SetTimer(tickFn, 16)
+    tick(*) {
+        if !active {
+            return
+        }
+        try {
+            EyedropperStep(&active, &waitRelease, &lastHex, &pickedCb, tick)
+        } catch as e {
+            ; any error cancels the eyedropper instead of firing every 16 ms forever
+            active := false
+            SetTimer(tick, 0)
+            try SetEyedropperSystemCursor(false)
+            ToolTip()
+            try DebugLogEvent("Eyedropper error: " e.Message " (line " e.Line ")", "ERROR")
+        }
+    }
+    SetTimer(tick, 16)
 }
 
 EyedropperStep(&active, &waitRelease, &lastHex, &pickedCb, tickFn) {
@@ -4944,21 +6076,19 @@ EyedropperStep(&active, &waitRelease, &lastHex, &pickedCb, tickFn) {
         SetEyedropperSystemCursor(false)
         ToolTip()
         KeyWait("LButton", "T1")
-        if (lastHex != "") {
-            if IsObject(pickedCb) {
-                pickedCb.Call(lastHex)
-            } else {
-                ApplyCustomUiColor(lastHex)
-            }
+                if (lastHex != "") {
+            cb := IsObject(pickedCb) ? pickedCb : ApplyCustomUiColor
+            pickedHex := lastHex
+            SetTimer(() => cb(pickedHex), -1)    ; apply after the timer thread has finished
         }
     }
 }
 
 ; Windows color picker (ChooseColor)
-PickCustomUiColor() {
-    global UI_Custom_Color, SettingsGui, ThemeBgRgb
+; Windows color picker (ChooseColor). Returns "RRGGBB" or "" if cancelled.
+PickColorDialog(startRgb) {
+    global SettingsGui
     static custColors := Buffer(64, 0)
-    startRgb := RegExMatch(UI_Custom_Color, "i)^[0-9a-f]{6}$") ? Integer("0x" UI_Custom_Color) : ThemeBgRgb
     cc := Buffer(A_PtrSize = 8 ? 72 : 36, 0)
     rgbOff := A_PtrSize * 3
     NumPut("UInt", cc.Size, cc, 0)
@@ -4967,9 +6097,47 @@ PickCustomUiColor() {
     NumPut("Ptr", custColors.Ptr, cc, rgbOff + A_PtrSize)
     NumPut("UInt", 0x3, cc, rgbOff + A_PtrSize * 2)          ; CC_RGBINIT | CC_FULLOPEN
     if !DllCall("comdlg32\ChooseColorW", "Ptr", cc, "Int") {
-        return
+        return ""
     }
-    ApplyCustomUiColor(Format("{:06X}", RgbToBgr(NumGet(cc, rgbOff, "UInt"))))
+    return Format("{:06X}", RgbToBgr(NumGet(cc, rgbOff, "UInt")))
+}
+
+PickCustomUiColor() {
+    global UI_Custom_Color, ThemeBgRgb
+    hex := PickColorDialog(RegExMatch(UI_Custom_Color, "i)^[0-9a-f]{6}$") ? Integer("0x" UI_Custom_Color) : ThemeBgRgb)
+    if (hex != "") {
+        ApplyCustomUiColor(hex)
+    }
+}
+
+PickCustomAccentColor() {
+    global UI_Accent_Color, ThemeAccentRgb
+    start := RegExMatch(UI_Accent_Color, "i)^[0-9a-f]{6}$") ? Integer("0x" UI_Accent_Color) : (IsInteger(ThemeAccentRgb) ? ThemeAccentRgb : 0x0078D4)
+    hex := PickColorDialog(start)
+    if (hex != "") {
+        ApplyAccentChoice("custom", hex)
+    }
+}
+
+ApplyAccentChoice(mode, hex := "") {
+    global UI_Accent_Mode, UI_Accent_Color
+    UI_Accent_Mode := (mode = "custom" && RegExMatch(hex, "i)^[0-9a-f]{6}$")) ? "custom" : "windows"
+    if (UI_Accent_Mode = "custom") {
+        UI_Accent_Color := hex
+    }
+    ReapplyUiTheme()
+    DebugLogEvent(UI_Accent_Mode = "custom" ? ("Accent color set to #" UI_Accent_Color) : "Accent color follows Windows")
+}
+
+ShowAccentMenu(ctrl) {
+    global UI_Accent_Mode
+    m := Menu()
+    m.Add("Use Windows accent color", (*) => ApplyAccentChoice("windows"))
+    m.Add("Choose custom accent...", (*) => PickCustomAccentColor())
+    m.Add("Pick accent with eyedropper", (*) => StartColorEyedropper((hex) => ApplyAccentChoice("custom", hex)))
+    m.Check(UI_Accent_Mode = "custom" ? "Choose custom accent..." : "Use Windows accent color")
+    ctrl.GetPos(&cx, &cy, , &ch)
+    m.Show(cx, cy + ch)
 }
 
 RgbToBgr(rgb) {
@@ -4983,23 +6151,84 @@ MixRgb(a, b, t) {
     return (r << 16) | (gr << 8) | bl
 }
 
-; Palette for every window: plain Dark / Light preset, or the user's custom color.
-; With a custom color, text contrast (UI_Dark_Mode) follows the color's brightness automatically.
+; --- contrast helpers (WCAG relative luminance / contrast ratio) ---
+LinearChannel(c) {
+    c := c / 255
+    return (c <= 0.03928) ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+}
+
+RelLuminance(rgb) {
+    return 0.2126 * LinearChannel((rgb >> 16) & 0xFF) + 0.7152 * LinearChannel((rgb >> 8) & 0xFF) + 0.0722 * LinearChannel(rgb & 0xFF)
+}
+
+ContrastRatio(a, b) {
+    la := RelLuminance(a), lb := RelLuminance(b)
+    return (Max(la, lb) + 0.05) / (Min(la, lb) + 0.05)
+}
+
+; Pushes fg lighter or darker (whichever helps) until it reaches minRatio against bg
+EnsureContrast(fg, bg, minRatio := 3.0) {
+    if (ContrastRatio(fg, bg) >= minRatio) {
+        return fg
+    }
+    target := (RelLuminance(bg) < 0.179) ? 0xFFFFFF : 0x000000
+    Loop 24 {
+        fg := MixRgb(fg, target, 0.08)
+        if (ContrastRatio(fg, bg) >= minRatio) {
+            break
+        }
+    }
+    return fg
+}
+
+; Palette for every window: plain Dark / Light preset, or a palette computed from the user's custom color.
 RefreshThemeColors() {
-    global UI_Dark_Mode, UI_Custom_Color, ThemeBgRgb, ThemeSurfaceRgb, themeBgBrush, themeSurfaceBrush
+    global UI_Dark_Mode, UI_Custom_Color, UI_Accent_Mode, UI_Accent_Color
+    global ThemeBgRgb, ThemeSurfaceRgb, ThemeTextRgb, ThemeMutedRgb, ThemeDisabledRgb, ThemeBorderRgb, ThemeAccentRgb
+    global themeBgBrush, themeSurfaceBrush
+
     if RegExMatch(UI_Custom_Color, "i)^[0-9a-f]{6}$") {
         bg := Integer("0x" UI_Custom_Color)
-        brightness := (((bg >> 16) & 0xFF) * 299 + ((bg >> 8) & 0xFF) * 587 + (bg & 0xFF) * 114) / 1000
-        UI_Dark_Mode := (brightness < 140)
+        UI_Dark_Mode := (RelLuminance(bg) < 0.179)          ; below this, white text has the better contrast
+        text := UI_Dark_Mode ? 0xFFFFFF : 0x000000
+        surface := MixRgb(bg, 0xFFFFFF, UI_Dark_Mode ? 0.10 : 0.55)   ; inputs / lists / group fills: lighter shade
+        if (ContrastRatio(surface, bg) < 1.08) {                       ; near-white background: go darker instead
+            surface := MixRgb(bg, 0x000000, 0.08)
+        }
+        if (ContrastRatio(text, surface) < 4.5) {                      ; mid-tone background: move away from the text color
+            surface := MixRgb(bg, UI_Dark_Mode ? 0x000000 : 0xFFFFFF, 0.12)
+        }
         ThemeBgRgb := bg
-        ThemeSurfaceRgb := MixRgb(bg, 0xFFFFFF, UI_Dark_Mode ? 0.10 : 0.55)    ; input boxes / lists sit a little lighter
+        ThemeSurfaceRgb := surface
     } else {
         UI_Custom_Color := ""
-        ThemeBgRgb := UI_Dark_Mode ? 0x1E1E1E : 0xF4F5F7
-        ThemeSurfaceRgb := UI_Dark_Mode ? 0x282828 : 0xFFFFFF
+        if UI_Modern_Look {
+            ThemeBgRgb := UI_Dark_Mode ? 0x17181C : 0xF2F3F7
+            ThemeSurfaceRgb := UI_Dark_Mode ? 0x22242A : 0xFFFFFF
+        } else {
+            ThemeBgRgb := UI_Dark_Mode ? 0x1E1E1E : 0xF4F5F7
+            ThemeSurfaceRgb := UI_Dark_Mode ? 0x282828 : 0xFFFFFF
+        }
     }
-    oldBg := themeBgBrush
-    oldSurface := themeSurfaceBrush
+
+    ThemeTextRgb     := UI_Dark_Mode ? 0xFFFFFF : 0x000000
+    if (UI_Modern_Look && UI_Custom_Color = "") {
+        ThemeTextRgb := UI_Dark_Mode ? 0xE9EAF0 : 0x1A1C22    ; slightly softer than pure white / black
+    }
+    ThemeBorderRgb   := UI_Soft_Look ? EnsureContrast(MixRgb(ThemeBgRgb, ThemeTextRgb, 0.16), ThemeBgRgb, 1.25)
+                                     : EnsureContrast(MixRgb(ThemeBgRgb, ThemeTextRgb, 0.30), ThemeBgRgb, 1.7)
+    ThemeMutedRgb    := EnsureContrast(MixRgb(ThemeTextRgb, ThemeBgRgb, 0.28), ThemeSurfaceRgb, 4.5)
+    ThemeDisabledRgb := MixRgb(ThemeTextRgb, ThemeBgRgb, 0.55)
+
+    if (UI_Accent_Mode = "custom" && RegExMatch(UI_Accent_Color, "i)^[0-9a-f]{6}$")) {
+        accent := Integer("0x" UI_Accent_Color)
+    } else {
+        accent := RgbToBgr(GetSystemAccentColorBGR())
+    }
+    ThemeAccentRgb := EnsureContrast(accent, ThemeBgRgb, 3.0)
+
+    oldBg := IsSet(themeBgBrush) ? themeBgBrush : 0
+    oldSurface := IsSet(themeSurfaceBrush) ? themeSurfaceBrush : 0
     themeBgBrush := DllCall("CreateSolidBrush", "UInt", RgbToBgr(ThemeBgRgb), "Ptr")
     themeSurfaceBrush := DllCall("CreateSolidBrush", "UInt", RgbToBgr(ThemeSurfaceRgb), "Ptr")
     for br in [oldBg, oldSurface] {
@@ -5009,7 +6238,34 @@ RefreshThemeColors() {
     }
 }
 
-; Best effort: paints the tray menu background with the custom color (Windows may ignore this when its own dark menu style is active)
+; Windows paints the left "gutter" (tick / icon column) of themed popup menus itself and ignores the menu background colour.
+; This turns the visual theme off for the tray popup window only, so the whole menu (gutter included) uses the custom colour.
+StartTrayMenuThemeHook() {
+    static hook := 0, cb := 0
+    if hook {
+        return
+    }
+    cb := CallbackCreate(TrayMenuPopupStartProc, , 7)
+    ; EVENT_SYSTEM_MENUPOPUPSTART (0x6), out-of-context, this process only
+    hook := DllCall("SetWinEventHook", "UInt", 0x6, "UInt", 0x6, "Ptr", 0, "Ptr", cb
+        , "UInt", DllCall("GetCurrentProcessId"), "UInt", 0, "UInt", 0, "Ptr")
+}
+
+TrayMenuPopupStartProc(hHook, event, hwnd, idObject, idChild, idThread, eventTime) {
+    global UI_Custom_Color
+    if (UI_Custom_Color = "" || !hwnd) {
+        return
+    }
+    buf := Buffer(64, 0)
+    DllCall("GetClassNameW", "Ptr", hwnd, "Ptr", buf.Ptr, "Int", 32)
+    if (StrGet(buf, "UTF-16") != "#32768") {
+        return
+    }
+    DllCall("uxtheme\SetWindowTheme", "Ptr", hwnd, "Str", "", "Str", "")
+    DllCall("RedrawWindow", "Ptr", hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0185)
+}
+
+; Best effort: paints the tray menu background with the custom color
 ApplyTrayMenuColor() {
     global UI_Custom_Color, ThemeBgRgb
     static trayBrush := 0
@@ -5024,6 +6280,7 @@ ApplyTrayMenuColor() {
             DllCall("DeleteObject", "Ptr", trayBrush)
         }
         trayBrush := newBrush
+        StartTrayMenuThemeHook()
     }
 }
 
@@ -5045,6 +6302,9 @@ ToggleHdrSdrMode(*) {
     RefreshStatsGuiFields()
 }
 SyncSettingsLiveRefreshTimer(*) {
+    if IsScriptWindowDrag() {    ; [smooth-2]
+        return
+    }
     global SettingsGui, CareUiRefs, oledActiveMsSinceRefresh
     if (!IsObject(SettingsGui) || !CareUiRefs.Has("hoursTxt") || !IsObject(CareUiRefs["hoursTxt"])) {
         SetTimer(SyncSettingsLiveRefreshTimer, 0)
@@ -5057,6 +6317,7 @@ SyncSettingsLiveRefreshTimer(*) {
 
 CloseSettingsGui(*) {
     BrowserTabClosed()
+    try NeverDim.CloseDlg()
     global SettingsGui, SettingsTabsCtrl, SettingsTabDefaultBanner, SettingsTabTipMap, GroupTitleTips, HdrSwitchMap, CareUiRefs
     global SettingsApplyBtn, SettingsHintCtrl, SettingsLastBannerText, isDraggingTrayRow, dragTraySourceRow, lastHoveredKey
     global LiveStatusRefs, lastIconEnforceTick
@@ -5077,6 +6338,9 @@ CloseSettingsGui(*) {
     SettingsTabsCtrl := ""
     SettingsTabDefaultBanner := Map()
     SettingsTabTipMap := Map()
+  ZoneDimming.DiscardDraft()
+  PanelZones.DiscardDraft()
+  TaskbarDimming.DiscardDraft()
     SettingsApplyBtn := ""
     SettingsHintCtrl := ""
     SettingsLastBannerText := ""
@@ -5126,6 +6390,7 @@ CommitSettingsFromGui(
     global Comp_Games_List, Excluded_Processes_List, TrayMenuItems, Tray_Menu_Config, lastCompCheckTick, lastExcludedCheckTick
     global Media_Players_List, Browsers_List
     global isAutoPrimaryDimmed, isManualBlackoutOn, isManualPrimaryDimOn, isAutoExtraDimmed, isManualExtraDimOn, manualExtraMonSet
+    global ThemeRebuilding
 
     savedTab := 1
     if IsObject(SettingsTabsCtrl) {
@@ -5175,6 +6440,8 @@ CommitSettingsFromGui(
 
     for mIdx, mc in extraMonTabCtrls {
         SetExtraMonSetting(mIdx, "Auto",          mc.chkAuto.Value)
+        SetWakeMode(mIdx, mc.ddlWake.Value)
+        SetGentleDim(mIdx, mc.chkGentle.Value)
         SetExtraMonSetting(mIdx, "HdrSdrMode",    mc.chkHdrSdr.Value)
         SetExtraMonSetting(mIdx, "CompAutoSdr",   mc.chkCompSdr.Value)
         SetExtraMonSetting(mIdx, "DimPercent",    mc.sldDark.Value)
@@ -5195,9 +6462,14 @@ CommitSettingsFromGui(
     Icon_Fade_Ms                  := Max(0, Min(2000, Integer(iconFade)))
     Start_With_Windows            := !!startWin
     Start_Minimized               := !!startMin
+       wasTbarAutoHide := Taskbar_AutoHide_Enabled
     Taskbar_AutoHide_Enabled      := !!tbarAutoHide
     SyncStartupRegistry(Start_With_Windows)
     SyncWindowsTaskbarAutoHide(PresetTaskbarTarget())
+    ; Unticking the box must always bring the taskbar back, even if the script did not turn auto-hide on itself
+    if (wasTbarAutoHide && !Taskbar_AutoHide_Enabled && !PresetTaskbarTarget() && QueryWindowsTaskbarAutoHide()) {
+        SetWindowsTaskbarAutoHide(false)
+    }
 
     Comp_Games_List               := Trim(StrReplace(StrReplace(compList, "`r", ""), "`n", " "))
     lastCompCheckTick             := 0
@@ -5217,6 +6489,7 @@ CommitSettingsFromGui(
         SetMonitorHotkeyVar(mIdx, hkCtrl.Value)
     }
     RegisterAllMonitorHotkeys()
+    CommitUtilityHotkeys()
 
     TrayMenuItems := CloneTrayItems(trayItemsDraft)
     Tray_Menu_Config := SerializeTrayItems(TrayMenuItems)
@@ -5225,7 +6498,7 @@ CommitSettingsFromGui(
     SavePresetsToIni()
     try ApplyAutomationChanges()
     SaveOledCareState()
-    UpdateTrayRefreshVisuals(true)
+    UpdateTrayRefreshVisuals()    ; [flicker-fix] not forced: the tray icon is only reset when its state really changed
     SetupTrayMenu()
     ResetAllIdleTimers()
     DebugLogEvent("Settings saved - Monitor 1 auto-dim " OnOff(Primary_Auto_Enabled) ", other monitors auto-dim " OnOff(IsAnyExtraMonAutoEnabled()) ", theme " (UI_Custom_Color != "" ? ("custom #" UI_Custom_Color) : (UI_Dark_Mode ? "dark" : "light")))
@@ -5252,13 +6525,22 @@ CommitSettingsFromGui(
     UpdateCursorVisibility()
 
     if closeAfter {
-        CloseSettingsGui()
+        PulseApplyButton()
+        SetTimer(CloseSettingsGuiFaded, -200)    ; let the "saved" pulse show, then fade out
     } else if (prevDark != UI_Dark_Mode) {
-        CloseSettingsGui()
-        OpenSettingsGui(savedTab)
+        ; [flicker-fix] same no-fade rebuild as the live theme toggle (a window faded in from alpha 0 pops its contents in late)
+        ThemeRebuilding := true
+        try {
+            CloseSettingsGui()
+            OpenSettingsGui(savedTab)
+        } finally {
+            ThemeRebuilding := false
+        }
+        SetTimer(RepaintThemedWindows, -80)
     } else {
+        ; [flicker-fix] Only the Apply button changes state here; repainting the whole window caused a visible flash.
         SetSettingsClean()
-        RepaintSettingsGui()
+        PulseApplyButton()
     }
 }
 
@@ -5273,7 +6555,7 @@ RepaintSettingsGui() {
 }
 
 SaveSettingsToScript() {
-    global UI_Dark_Mode, UI_Custom_Color, Debug_Log_Enabled, Debug_Log_Path
+      global UI_Dark_Mode, UI_Custom_Color, Debug_Log_Enabled, Debug_Log_Path, UI_Accent_Mode, UI_Accent_Color
     global Primary_Auto_Enabled, OLED_HDR_SDR_Mode_Enabled, Comp_Game_Auto_SDR_Enabled, Active_HDR_Mode, Primary_Dim_Percent, Primary_HDR_Dim_Percent, Primary_Fade_Ms
     global OLED_Refresh_Reminder_Enabled, OLED_Refresh_Reminder_Days, OLED_Refresh_Reminder_Hours, OLED_Refresh_Reminder_Minutes
     global OLED_Refresh_Popup_Monitor, OLED_Refresh_Alert_Style, OLED_Refresh_Popup_Sound
@@ -5327,6 +6609,8 @@ SaveSettingsToScript() {
 
         SetScriptVar(&code, "UI_Dark_Mode",                  UI_Dark_Mode ? "true" : "false")
         SetScriptVar(&code, "UI_Custom_Color",               UI_Custom_Color, true)
+        SetScriptVar(&code, "UI_Accent_Mode",                UI_Accent_Mode, true)
+        SetScriptVar(&code, "UI_Accent_Color",               UI_Accent_Color, true)
         SetScriptVar(&code, "Debug_Log_Enabled",             Debug_Log_Enabled ? "true" : "false")
         SetScriptVar(&code, "Debug_Log_Path",                Debug_Log_Path, true)
         SetScriptVar(&code, "OLED_Refresh_Reminder_Enabled", OLED_Refresh_Reminder_Enabled ? "true" : "false")
@@ -5437,13 +6721,7 @@ ParseCompGamesList() {
 
 ParseExcludedProcessesList() {
     global Excluded_Processes_List, Excluded_Processes
-    Excluded_Processes := []
-    for item in StrSplit(Excluded_Processes_List, ",") {
-        exe := Trim(item)
-        if (exe != "") {
-            Excluded_Processes.Push(exe)
-        }
-    }
+    Excluded_Processes := NeverDim.Parse(Excluded_Processes_List)
 }
 
 ; Builds the live video-player / browser lists from the General tab text (blank = built-in lists)
@@ -5609,20 +6887,17 @@ IsExcludedProcessRunning() {
     if (Excluded_Processes.Length = 0) {
         return false
     }
-   
+
     if (A_TickCount - lastExcludedCheckTick < 1000) {
+        return cachedExcludedRunning
+    }
+    if IsScriptWindowDrag() {    ; [smooth-2] keep the last answer while the Settings window is being dragged
         return cachedExcludedRunning
     }
     lastExcludedCheckTick := A_TickCount
 
-    for proc in Excluded_Processes {
-        if ProcessExist(proc) {
-            cachedExcludedRunning := true
-            return true
-        }
-    }
-    cachedExcludedRunning := false
-    return false
+    cachedExcludedRunning := NeverDim.Evaluate() ? true : false
+    return cachedExcludedRunning
 }
 
 GetDefaultTrayItems() {
@@ -5729,7 +7004,13 @@ GetTrayItemMenuLabel(id) {
 }
 
 GetTrayItemDisplayName(id) {
-    return StrReplace(GetTrayItemMenuLabel(id), "&&", "&")
+    global Active_HDR_Mode
+    name := StrReplace(GetTrayItemMenuLabel(id), "&&", "&")
+    ; the real tray menu shows the current HDR / SDR state after this item, so the table does too
+    if (id = "hdr_toggle") {
+        name .= "  -  " (Active_HDR_Mode ? "HDR on" : "SDR on")
+    }
+    return name
 }
 
 GetActivePrimaryDimAlpha() {
@@ -6233,6 +7514,10 @@ ClassifyWindowContext(snap, monIdx) {
         if (r != "") {
             return r
         }
+        ; Windowed video: the browser has no fullscreen / maximized video, but while one plays it keeps the display on
+        if IsDisplayRequestedByApp() {
+            return "movie_playing"
+        }
     }
 
     if isMediaApp {
@@ -6242,7 +7527,14 @@ ClassifyWindowContext(snap, monIdx) {
         if (exeLow != "applicationframehost.exe" && isFs && !IsWindowExplicitlyPaused(snap.hwnd, snap.exe, snap.title)) {
             return "movie_playing"
         }
-        return IsMediaActivelyPlaying(snap.hwnd, snap.pid, snap.exe, snap.title) ? "movie_playing" : "movie_paused"
+        if IsMediaActivelyPlaying(snap.hwnd, snap.pid, snap.exe, snap.title) {
+            return "movie_playing"
+        }
+        ; A windowed player that is not clearly paused but is keeping the display on is playing
+        if (IsDisplayRequestedByApp() && !IsWindowExplicitlyPaused(snap.hwnd, snap.exe, snap.title)) {
+            return "movie_playing"
+        }
+        return "movie_paused"
     }
 
     if (isFg && !isBrowser) {
@@ -6402,9 +7694,65 @@ IsMediaActivelyPlaying(hwnd, pid, exeName, cachedTitle := "") {
     return lastPlayingTick.Has(key) && (A_TickCount - lastPlayingTick[key]) < 2000
 }
 
+; True while some app asks Windows to keep the display on (ES_DISPLAY_REQUIRED, 0x2). Browsers and video players make
+; that request while a video plays - also in a small window - and Windows lets any normal program read it, so this needs
+; no admin rights. The request is system-wide (it does not say which window made it), so callers combine it with the
+; browser / player windows they can see. Polled from the idle loop; the answer is cached for 400 ms and held for 2.5 s
+; after the last positive reading so a short gap can't flip the screen between "playing" and "idle".
+IsDisplayRequestedByApp() {
+    static lastPollTick := 0, lastTrueTick := 0, lastRaw := false, lastLogged := false
+    now := A_TickCount
+    if (now - lastPollTick >= 400) {
+        lastPollTick := now
+        raw := false
+        try {
+            esState := Buffer(4, 0)
+            ; SystemExecutionState = 16 -> ULONG made of the ES_* flags that apps have requested
+            status := DllCall("powrprof\CallNtPowerInformation", "Int", 16, "Ptr", 0, "UInt", 0, "Ptr", esState.Ptr, "UInt", 4, "Int")
+            raw := (status = 0) && ((NumGet(esState, 0, "UInt") & 0x2) != 0)   ; ES_DISPLAY_REQUIRED
+        }
+        lastRaw := raw
+        if raw {
+            lastTrueTick := now
+        }
+        held := raw || (now - lastTrueTick) < 2500
+        if (held != lastLogged) {
+            lastLogged := held
+            try DebugLogEvent("Display kept on by an app (ES_DISPLAY_REQUIRED): " (held ? "yes - windowed video counts as playing" : "no"))
+        }
+    }
+    return lastRaw || (now - lastTrueTick) < 2500
+}
+
+; [smooth-2] True while THIS script's own window (the Settings window) is being dragged / resized. That move loop runs on the
+; script's own thread, so any timer callback that fires meanwhile delays the window directly. Asks for this thread's state
+; (not the foreground thread's), so dragging other programs' windows never matches.
+IsScriptWindowDrag() {
+    static gti := Buffer(A_PtrSize = 8 ? 72 : 48, 0)
+    NumPut("UInt", gti.Size, gti, 0)
+    if !DllCall("GetGUIThreadInfo", "UInt", DllCall("GetCurrentThreadId", "UInt"), "Ptr", gti.Ptr, "Int") {
+        return false
+    }
+    return (NumGet(gti, 4, "UInt") & 0x2) != 0
+}
+
+; [smooth-1] True while the user is moving / resizing a window by its title bar or edge (GUI_INMOVESIZE on the foreground thread).
+; Used to keep the heavy background scans from running in the middle of a drag.
+IsWindowDragActive() {
+    static gti := Buffer(A_PtrSize = 8 ? 72 : 48, 0)
+    NumPut("UInt", gti.Size, gti, 0)
+    if !DllCall("GetGUIThreadInfo", "UInt", 0, "Ptr", gti.Ptr, "Int") {
+        return false
+    }
+    return (NumGet(gti, 4, "UInt") & 0x2) != 0
+}
+
 GetMoviePlayingMonitorsCached() {
     static cachedMons := Map(), lastScanTick := 0
-    if (A_TickCount - lastScanTick < 700) {
+    if (A_TickCount - lastScanTick < 1500) {    ; [smooth-1] was 700 ms
+        return cachedMons
+    }
+    if IsWindowDragActive() {    ; [smooth-1] never run the all-windows scan (COM / media-session calls) mid-drag; reuse the last result
         return cachedMons
     }
     lastScanTick := A_TickCount
@@ -7062,6 +8410,19 @@ IsCompGameRunning() {
     return false
 }
 
+; True when a competitive game is running AND its own window is on this monitor (a monitor that merely
+; inherited the game state through "game carryover" does not count).
+IsCompGameOnMonitor(mon) {
+    if !IsCompGameRunning() {
+        return false
+    }
+    try {
+        info := GetMonitorContextInfo(mon)
+        return (info.ctx = "comp_game" && info.carried = 0)
+    }
+    return false
+}
+
 GetPrimaryTimeoutSeconds(ctx := "") {
     global Primary_SDR_Desktop_Sec, Primary_SDR_Normal_Sec, Primary_SDR_Comp_Sec, Primary_SDR_Paused_Sec
     global Primary_HDR_Desktop_Sec, Primary_HDR_Normal_Sec, Primary_HDR_Comp_Sec, Primary_HDR_Paused_Sec
@@ -7486,7 +8847,7 @@ SetupTrayMenu() {
         label := GetTrayItemMenuLabel(item.id)
         switch item.id {
             case "hdr_toggle":
-                tray.Add(label, ToggleActiveHdrSdrSwitch)
+                tray.Add(label "  -  " (Active_HDR_Mode ? "HDR on" : "SDR on"), ToggleActiveHdrSdrSwitch)
             case "hdr_sdr":
                 tray.Add(label, ToggleHdrSdrMode)
             case "refresh":
@@ -7666,7 +9027,7 @@ TrayPresetAutomatic(*) {
 }
 
 ToggleAutomationPause(*) {
-    global isAutomationPaused, isAutoPrimaryDimmed, isManualBlackoutOn, isManualPrimaryDimOn, isAutoExtraDimmed, manualExtraMonSet
+    global isAutomationPaused, isAutoPrimaryDimmed, isManualBlackoutOn, isManualPrimaryDimOn, isAutoExtraDimmed, manualExtraMonSet, extraMonPreDimSet
     isAutomationPaused := !isAutomationPaused
 
     if isAutomationPaused {
@@ -7674,8 +9035,9 @@ ToggleAutomationPause(*) {
         if (!isManualBlackoutOn && !isManualPrimaryDimOn) {
             StartPrimaryOverlayFade(0)
         }
-        if isAutoExtraDimmed {
+        if (isAutoExtraDimmed || extraMonPreDimSet.Count > 0) {
             isAutoExtraDimmed := false
+            extraMonPreDimSet := Map()
             if (manualExtraMonSet.Count = 0) {
                 StartExtraFade(0)
             }
@@ -7934,6 +9296,9 @@ SetWakePoll(enable) {
 
 ; Hook-free wake detection. Runs only while something is dimmed or hidden.
 FastWakePoll(resetBaseline := false) {
+    if (!resetBaseline && IsScriptWindowDrag()) {    ; [smooth-2]
+        return
+    }
     global isSessionLocked, areDesktopIconsHidden, lastDesktopIconActiveTick, wakeHookInitX, wakeHookInitY, MANUAL_WAKE_MOVE_PX
     global isManualExtraDimOn, manualExtraMonSet, isAutoExtraDimmed
     static prevIdle := 0, prevL := false, prevR := false, prevX := -99999, prevY := -99999
@@ -8012,6 +9377,7 @@ FastWakePoll(resetBaseline := false) {
         wakeHookInitX := curX
         wakeHookInitY := curY
         if !onPrimary {
+        CursorRevealTick(true)
             ; Secondary monitor: a click always wakes. Plain mouse movement also wakes a MANUALLY dimmed / blacked-out monitor
             ; (the grace window and the move threshold keep jitter from doing it).
             if (lPress || rPress) {
@@ -8019,7 +9385,8 @@ FastWakePoll(resetBaseline := false) {
                         } else if (isManualExtraDimOn || manualExtraMonSet.Count > 0 || isAutoExtraDimmed) {
                 TriggerInstantWake(curX, curY, false, false)
             }
-        } else {
+                } else {
+            CursorRevealTick(true)
             TriggerInstantWake(curX, curY, false, false)
         }
     } else if ((idleDropped && samePos) || lPress || rPress) {
@@ -8027,6 +9394,25 @@ FastWakePoll(resetBaseline := false) {
         TriggerInstantWake(curX, curY, true, !(lPress || rPress))
     }
 }
+; [kb-wake] The monitor typing belongs to = the monitor holding the active (foreground) window, not wherever the mouse pointer happens to sit.
+GetForegroundWindowPoint(&x, &y) {
+    hwnd := DllCall("GetForegroundWindow", "Ptr")
+    if !hwnd {
+        return false
+    }
+    rc := Buffer(16, 0)
+    if !DllCall("GetWindowRect", "Ptr", hwnd, "Ptr", rc.Ptr) {
+        return false
+    }
+    l := NumGet(rc, 0, "Int"), t := NumGet(rc, 4, "Int"), r := NumGet(rc, 8, "Int"), b := NumGet(rc, 12, "Int")
+    if (r <= l || b <= t) {
+        return false
+    }
+    x := (l + r) // 2
+    y := (t + b) // 2
+    return true
+}
+
 TriggerInstantWake(evX := -99999, evY := -99999, isInput := false, isKeyboard := false) {
     global isSessionLocked, isTestingPrimaryDim, isTestingExtraDim
     global isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed
@@ -8063,6 +9449,12 @@ TriggerInstantWake(evX := -99999, evY := -99999, isInput := false, isKeyboard :=
     wasOnExtraMonitor    := onExtraNow
     lastCursorInputTick  := now
 
+    ; [kb-wake] typing wakes the monitor that holds the active window, even when the mouse pointer is on another monitor
+    if (isKeyboard && GetForegroundWindowPoint(&kbX, &kbY)) {
+        onExtraNow := IsPointOnExtraMonitor(kbX, kbY)
+        activeExtraMon := onExtraNow ? GetExtraMonitorAtPoint(kbX, kbY) : 0
+    }
+
     ; Only the mouse brings the cursor back. Typing leaves it hidden (no more popping in and out while you type).
     if !isKeyboard {
         lastCursorMoveTick := now
@@ -8073,15 +9465,19 @@ TriggerInstantWake(evX := -99999, evY := -99999, isInput := false, isKeyboard :=
         }
     }
 
+        ; Wake mode: this monitor may only wake from the event types chosen in its Wake dropdown
+    wakeMon := activeExtraMon ? activeExtraMon : MonitorGetPrimary()
+    if isKeyboard {
+        ; [kb-wake] typing always wakes (it used to need the Move + Click wake mode, so on Move or Click it never woke)
+    } else if !WakeEventAllowed(wakeMon, isInput, !isInput) {
+        SyncWakeHooks()
+        return
+    }
+
    if onExtraNow {
-        ; Keyboard events (such as releasing PgUp after pressing the hotkey) must not wake a dimmed secondary monitor
-        if isKeyboard {
-            return
-        }
+        ; [kb-wake] keyboard now wakes a dimmed secondary monitor too. Releasing the dim hotkey itself is covered by the manual-wake grace time.
         ; Ignore idle-drop triggers when cursor is stationary on secondary monitor unless a mouse button was actually clicked
-        if (isInput && !GetKeyState("LButton", "P") && !GetKeyState("RButton", "P") && !GetKeyState("MButton", "P")) {
-            return
-        }
+       ; FastWakePoll already confirmed a rising-edge button press when isInput is true
         lastExtraActiveTick := now
         if (activeExtraMon >= 2) {
             extraMonLastActiveTick[activeExtraMon] := now
@@ -8127,6 +9523,8 @@ TriggerInstantWake(evX := -99999, evY := -99999, isInput := false, isKeyboard :=
             NotifyWakeEvent()
             LogPrimaryWake(isKeyboard ? "keyboard input" : (isInput ? "mouse click / scroll" : "mouse moved on Monitor 1"))
             SetupTrayMenu()
+        } else {
+            ClearPrimaryPreDim()    ; [gentle] activity during the heads-up: nothing was lost
         }
     }
 
@@ -8278,6 +9676,9 @@ IsPointInDesktopShell(curX, curY) {
 ; While the icon list is see-through, Windows lets clicks on its empty background fall through to the desktop behind it,
 ; so the list never hears the click and keeps its selection. Catch that click here and clear the selection ourselves.
 DesktopClickDeselectWatch() {
+    if IsScriptWindowDrag() {    ; [smooth-2]
+        return
+    }
     global Desktop_Hide_Enabled, areDesktopIconsHidden, isSessionLocked
         static prevL := false, prevR := false
     lDown := GetKeyState("LButton", "P")
@@ -8388,7 +9789,7 @@ SafeRun(fn, label) {
 RunCursorHideLogic(now) {
     global Cursor_Hide_Enabled, isManualPrimaryDimOn, isCursorIdleHidden, lastCursorMoveTick
     deskIdleSec := GetDesktopIdleSec()
-    cursorOn := (Cursor_Hide_Enabled && !isManualPrimaryDimOn && deskIdleSec > 0)
+    cursorOn := (Cursor_Hide_Enabled && !isManualPrimaryDimOn && deskIdleSec > 0 && !IsCompGameRunning())
     if !cursorOn {
         if isCursorIdleHidden {
             SetCursorIdleHidden(false)
@@ -8422,6 +9823,13 @@ RunIconHideLogic(now) {
         holdCached := IsDesktopHoldActive(now)
     }
     holdActive := holdCached
+    ; [drag-select-fix] Left button held on empty desktop / icons = selection box in progress: never hide the icons mid-drag
+    if (!holdActive && GetKeyState("LButton", "P")) {
+        mpt := Buffer(8, 0)
+        if (DllCall("GetCursorPos", "Ptr", mpt.Ptr) && IsPointInDesktopShell(NumGet(mpt, 0, "Int"), NumGet(mpt, 4, "Int"))) {
+            holdActive := true
+        }
+    }
     if holdActive {
         lastDesktopIconActiveTick := now
         if areDesktopIconsHidden {
@@ -8450,9 +9858,13 @@ ResetDimIdleTimers(now := 0) {
 }
 
 CheckIdleActivity() {
+    if IsScriptWindowDrag() {    ; [smooth-2]
+        return
+    }
     global isAutomationPaused, isSessionLocked, isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed
     global isCursorIdleHidden, areDesktopIconsHidden, isAutoExtraDimmed, isManualExtraDimOn, manualExtraMonSet
     global extraMonDimmedSet, extraMonLastActiveTick, manualExtraStartTick
+    global extraMonPreDimSet, primaryPreDimAlpha
     global manualPrimaryStartTick, manualPrimaryAnchorX, manualPrimaryAnchorY
     static isCompTimerThrottled := false
 
@@ -8586,8 +9998,8 @@ CheckIdleActivity() {
                 extraMonLastActiveTick[activeExtraMon] := now
             }
         }
-       ProcessManualExtraWake(now, hasCursorPos, curX, curY, activeExtraMon, mouseClicked, mouseMoved && !spuriousMove)
-        ProcessManualPrimaryWake(now, hasCursorPos, curX, curY, onExtraNow, inputHappened)
+ProcessManualExtraWake(now, hasCursorPos, curX, curY, activeExtraMon, mouseClicked, mouseMoved && !spuriousMove)
+        ProcessManualPrimaryWake(now, hasCursorPos, curX, curY, onExtraNow, inputHappened, mouseClicked)
         if hasCursorPos {
             lastMouseX := curX
             lastMouseY := curY
@@ -8608,13 +10020,30 @@ CheckIdleActivity() {
         RestoreDesktopIconsImmediate()
     }
 
+    kbOnly := inputHappened && !mouseMoved && !mouseClicked
+    kbPoint := (kbOnly && GetForegroundWindowPoint(&kbPx, &kbPy))
     if activity {
         lastCursorInputTick  := now
 
-        if (onExtraNow || wasOnExtraMonitor) {
+        if kbPoint {
+            ; [kb-wake] typing counts for the monitor holding the active window, not the one under the mouse pointer
+            if IsPointOnExtraMonitor(kbPx, kbPy) {
+                lastExtraActiveTick := now
+                kbMon := GetExtraMonitorAtPoint(kbPx, kbPy)
+                if (kbMon >= 2) {
+                    extraMonLastActiveTick[kbMon] := now
+                }
+            } else {
+                lastPrimaryActiveTick    := now
+                lastPrimaryRealInputTick := now
+            }
+        } else if (onExtraNow || wasOnExtraMonitor) {
             lastExtraActiveTick := now
-            if (activeExtraMon >= 2) {
-                extraMonLastActiveTick[activeExtraMon] := now
+                        if (activeExtraMon >= 2) {
+                ; A dimmed monitor only counts input of the type its Wake dropdown allows
+                if (!extraMonDimmedSet.Has(activeExtraMon) || WakeEventAllowed(activeExtraMon, mouseClicked, mouseMoved && !spuriousMove)) {
+                    extraMonLastActiveTick[activeExtraMon] := now
+                }
             }
             if (!onExtraNow && wasOnExtraMonitor && !inputHappened) {
                 lastPrimaryActiveTick    := now
@@ -8633,9 +10062,9 @@ CheckIdleActivity() {
     wasOnExtraMonitor := onExtraNow
     UpdateCursorVisibility()
 
-  ; Per-monitor manual wake: each dimmed monitor only wakes from mouse move/click on that monitor
+; Per-monitor manual wake: each dimmed monitor only wakes from mouse move/click on that monitor
     ProcessManualExtraWake(now, hasCursorPos, curX, curY, activeExtraMon, mouseClicked, mouseMoved && !spuriousMove)
-    if ProcessManualPrimaryWake(now, hasCursorPos, curX, curY, onExtraNow, inputHappened) {
+    if ProcessManualPrimaryWake(now, hasCursorPos, curX, curY, onExtraNow, inputHappened, mouseClicked) {
         return
     }
 
@@ -8651,6 +10080,7 @@ CheckIdleActivity() {
         } else {
             ResetAllIdleTimers(now)
         }
+        ClearPrimaryPreDim()
         if isAutoPrimaryDimmed {
             isAutoPrimaryDimmed := false
             if (!isManualBlackoutOn && !isManualPrimaryDimOn) {
@@ -8658,9 +10088,10 @@ CheckIdleActivity() {
             }
             UpdateCursorVisibility()
         }
-        if (isAutoExtraDimmed || extraMonDimmedSet.Count > 0) {
+        if (isAutoExtraDimmed || extraMonDimmedSet.Count > 0 || extraMonPreDimSet.Count > 0) {
             isAutoExtraDimmed := false
             extraMonDimmedSet := Map()
+            extraMonPreDimSet := Map()
             if (!isManualExtraDimOn && manualExtraMonSet.Count = 0) {
                 StartExtraFade(0)
             }
@@ -8707,6 +10138,7 @@ CheckIdleActivity() {
     activePrimaryAlphaCap := GetActivePrimaryDimAlpha()
     priTimeoutSec := GetPrimaryTimeoutSeconds(priCtx)
     if (!Primary_Auto_Enabled || activePrimaryAlphaCap = 0 || priTimeoutSec <= 0) {
+        ClearPrimaryPreDim()
         if isAutoPrimaryDimmed {
             isAutoPrimaryDimmed := false
             if (!isManualBlackoutOn && !isManualPrimaryDimOn) {
@@ -8724,6 +10156,7 @@ CheckIdleActivity() {
             ; Do not start a dim in the middle of a display / HDR transition
             if (!isAutoPrimaryDimmed && !displaySettling && (now - primaryLastWakeTick) > PRIMARY_REDIM_MS) {
                 isAutoPrimaryDimmed := true
+                primaryPreDimAlpha  := 0
                 primaryAutoDimTick  := now
                 StartPrimaryOverlayFade(activePrimaryAlphaCap)
                 UpdateCursorVisibility()
@@ -8738,13 +10171,25 @@ CheckIdleActivity() {
             realWake        := (lastPrimaryRealInputTick > primaryAutoDimTick)
             mediaWake       := (priCtx = "movie_playing")
             timerWake       := (lastPrimaryActiveTick > primaryAutoDimTick) && !displaySettling
-            if (!postDimSettling && (realWake || mediaWake || timerWake)) {
+            ; Move / Click modes are handled by the 40 ms wake poll (TriggerInstantWake); only Both wakes here from any input
+            inputWakeOk := (GetWakeMode(MonitorGetPrimary()) = 3) && (realWake || timerWake)
+            if (!postDimSettling && (inputWakeOk || mediaWake)) {
                 isAutoPrimaryDimmed := false
                 StartPrimaryOverlayFade(0)
                 UpdateCursorVisibility()
                 NotifyWakeEvent()
                 LogPrimaryWake(realWake ? "keyboard / mouse / controller input" : (mediaWake ? "a video started playing" : "activity on Monitor 1"))
                 SetupTrayMenu()
+            }
+        } else {
+            ; [gentle] heads-up: a few seconds before the full dim the screen drops partway. Any activity resets the idle timer,
+            ; which takes the pre-dim straight back out (the wake poll does it within ~40 ms). Never during competitive games.
+            preMs := (GetGentleDim(MonitorGetPrimary()) && !compRunningNow) ? Min(GENTLE_LEAD_MS, primaryIdleLimitMs // 2) : 0
+            if (preMs > 0 && primaryIdleElapsed >= primaryIdleLimitMs - preMs && !displaySettling) {
+                primaryPreDimAlpha := Max(1, Round(activePrimaryAlphaCap * GENTLE_LEVEL))
+                StartPrimaryOverlayFade(primaryPreDimAlpha)
+            } else {
+                ClearPrimaryPreDim()
             }
         }
     }
@@ -8753,6 +10198,7 @@ CheckIdleActivity() {
     priIdx := MonitorGetPrimary()
     if (monCount > 1 && IsAnyExtraMonAutoEnabled() && !isManualExtraDimOn && manualExtraMonSet.Count = 0) {
         desiredDimSet := Map()
+        desiredPreSet := Map()
         Loop monCount {
             mIdx := A_Index
             if (mIdx = priIdx || !GetExtraMonSetting(mIdx, "Auto")) {
@@ -8769,8 +10215,13 @@ CheckIdleActivity() {
                 extraMonLastActiveTick[mIdx] := lastExtraActiveTick
             }
             mTimeoutMs := mTimeoutSec * 1000
-            if ((now - extraMonLastActiveTick[mIdx]) >= mTimeoutMs) {
+            mElapsed := now - extraMonLastActiveTick[mIdx]
+            if (mElapsed >= mTimeoutMs) {
                 desiredDimSet[mIdx] := true
+            } else if (GetGentleDim(mIdx) && !compRunningNow && !displaySettling && GetWakeMode(mIdx) != 2
+                && mElapsed >= mTimeoutMs - Min(GENTLE_LEAD_MS, mTimeoutMs // 2)) {
+                ; [gentle] heads-up (skipped on click-only monitors: their overlay would swallow the click)
+                desiredPreSet[mIdx] := true
             }
         }
 
@@ -8784,14 +10235,18 @@ CheckIdleActivity() {
             }
         }
 
-        if changedSet {
+        preChanged := !SameKeySet(desiredPreSet, extraMonPreDimSet)
+        if (changedSet || preChanged) {
             wasAnyDim := isAutoExtraDimmed
-            DebugLogEvent(desiredDimSet.Count > 0 ? ("Idle - dimming " MonListText(desiredDimSet)) : "Activity - other monitors woke up")
-            extraMonDimmedSet := desiredDimSet
-            isAutoExtraDimmed := (desiredDimSet.Count > 0)
-            if isAutoExtraDimmed {
+            if changedSet {
+                DebugLogEvent(desiredDimSet.Count > 0 ? ("Idle - dimming " MonListText(desiredDimSet)) : "Activity - other monitors woke up")
+                extraMonDimmedSet := desiredDimSet
+                isAutoExtraDimmed := (desiredDimSet.Count > 0)
+            }
+            extraMonPreDimSet := desiredPreSet
+            if (isAutoExtraDimmed || extraMonPreDimSet.Count > 0) {
                 StartExtraFade(GetActiveExtraDimAlpha())
-                if !wasAnyDim {
+                if (isAutoExtraDimmed && !wasAnyDim) {
                     NotifyDimEvent()
                 }
             } else {
@@ -8800,15 +10255,23 @@ CheckIdleActivity() {
                     NotifyWakeEvent()
                 }
             }
+            if changedSet {
+                SetupTrayMenu()
+            }
+        }
+    } else {
+        if (extraMonPreDimSet.Count > 0) {    ; [gentle] the auto-dim conditions ended (auto turned off, manual dim started...): drop any heads-up
+            extraMonPreDimSet := Map()
+            StartExtraFade((isAutoExtraDimmed || isManualExtraDimOn || manualExtraMonSet.Count > 0) ? GetActiveExtraDimAlpha() : 0)
+        }
+        if (isAutoExtraDimmed && (monCount <= 1 || !IsAnyExtraMonAutoEnabled())) {
+            isAutoExtraDimmed := false
+            extraMonDimmedSet := Map()
+            if (!isManualExtraDimOn && manualExtraMonSet.Count = 0) {
+                StartExtraFade(0)
+            }
             SetupTrayMenu()
         }
-    } else if (isAutoExtraDimmed && (monCount <= 1 || !IsAnyExtraMonAutoEnabled())) {
-        isAutoExtraDimmed := false
-        extraMonDimmedSet := Map()
-        if (!isManualExtraDimOn && manualExtraMonSet.Count = 0) {
-            StartExtraFade(0)
-        }
-        SetupTrayMenu()
     }
 }
 
@@ -8982,7 +10445,7 @@ ProcessManualExtraWake(now, hasCursorPos, curX, curY, activeExtraMon, inputHappe
     if ((now - lastDisplayChangeTick) < DISPLAY_SETTLE_MS) {
         moved := false    ; a display change can reposition the cursor
     }
-    if !(inputHappened || moved) {
+       if !WakeEventAllowed(activeExtraMon, inputHappened, moved) {
         return false
     }
 
@@ -8990,7 +10453,7 @@ ProcessManualExtraWake(now, hasCursorPos, curX, curY, activeExtraMon, inputHappe
 }
 
 ; Manual Monitor 1 dim / blackout wakes only from interaction with Monitor 1 (after the grace window)
-ProcessManualPrimaryWake(now, hasCursorPos, curX, curY, onExtraNow, inputHappened) {
+ProcessManualPrimaryWake(now, hasCursorPos, curX, curY, onExtraNow, inputHappened, clicked := false) {
     global isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed
     global manualPrimaryStartTick, manualPrimaryAnchorX, manualPrimaryAnchorY
     global MANUAL_WAKE_GRACE_MS, MANUAL_WAKE_MOVE_PX, lastDisplayChangeTick, DISPLAY_SETTLE_MS
@@ -9010,7 +10473,11 @@ ProcessManualPrimaryWake(now, hasCursorPos, curX, curY, onExtraNow, inputHappene
     if ((now - lastDisplayChangeTick) < DISPLAY_SETTLE_MS) {
         moved := false    ; topology change may have repositioned the cursor
     }
-    if !(inputHappened || moved) {
+        if (GetWakeMode(MonitorGetPrimary()) != 3) {
+        if !WakeEventAllowed(MonitorGetPrimary(), clicked, moved) {
+            return false
+        }
+    } else if !(inputHappened || moved) {
         return false
     }
 
@@ -9076,6 +10543,10 @@ StartPrimaryOverlayFade(alphaTarget, customFadeMs := -1) {
 
     newTarget := Max(0, Min(255, Integer(alphaTarget)))
     fadeDuration := (customFadeMs >= 0) ? customFadeMs : Primary_Fade_Ms
+    ; [wake-fast] dimming keeps the Fade Speed you set; fading back UP to clear (waking) is capped at WAKE_FADE_MS
+    if (customFadeMs < 0 && newTarget < currentPrimaryAlpha) {
+        fadeDuration := Min(fadeDuration, WAKE_FADE_MS)
+    }
 
     if (fadeDuration > 0 && newTarget = targetPrimaryAlpha && (primaryFadeActive || currentPrimaryAlpha = newTarget)) {
         return
@@ -9228,6 +10699,13 @@ ApplyDesktopListViewAlpha(lvHwnd, alpha) {
         lastAlpha := alpha
         return
     }
+     ; [drag-select-fix] Fully hidden (alpha 0) must NOT use ShowWindow(SW_HIDE) or the colour key. A hidden list cannot receive
+    ; the mouse press, and a colour-keyed list lets clicks on its empty background fall through to Progman, which cannot draw a
+    ; selection marquee. Instead keep the list shown at alpha 1 (invisible) with plain alpha only (LWA_ALPHA = 0x2), so it stays
+    ; hit-testable and the press reaches it. FastWakePoll then restores the icons and the native drag-select runs.
+    hiddenMode := (alpha <= 0)
+    effAlpha   := hiddenMode ? 1 : alpha
+    wantFlags  := 0x2    ; [drag-select-fix] alpha only, never a colour key, so empty space always reaches the list and the marquee works at any opacity
     needSet := false
     if !(exStyle & 0x80000) {
         DllCall("SetWindowLongPtr", "Ptr", lvHwnd, "Int", -20, "Ptr", exStyle | 0x80000)
@@ -9236,22 +10714,17 @@ ApplyDesktopListViewAlpha(lvHwnd, alpha) {
     ; Ask Windows what is REALLY applied instead of trusting a cached value (Explorer can reset it)
     key := 0, a := 0, flags := 0
     if DllCall("GetLayeredWindowAttributes", "Ptr", lvHwnd, "UInt*", &key, "UChar*", &a, "UInt*", &flags, "Int") {
-        if (a != alpha || key != 0 || (flags & 0x3) != 0x3) {
+        if (a != effAlpha || (flags & 0x3) != wantFlags) {
             needSet := true
         }
     } else if (lvHwnd != lastHwnd || alpha != lastAlpha) {
         needSet := true
     }
     if needSet {
-        ; Black is the colour key (0x3), so the list's empty background stays transparent and the wallpaper is never darkened.
-        DllCall("SetLayeredWindowAttributes", "Ptr", lvHwnd, "UInt", 0, "UChar", alpha, "UInt", 0x3)
+        ; Visible-but-faded: black colour key (0x3) keeps the empty background transparent. Hidden: alpha only (0x2), no key.
+        DllCall("SetLayeredWindowAttributes", "Ptr", lvHwnd, "UInt", 0, "UChar", effAlpha, "UInt", wantFlags)
     }
-    isVisible := DllCall("IsWindowVisible", "Ptr", lvHwnd, "Int")
-    if (alpha <= 0) {
-        if isVisible {
-            DllCall("ShowWindow", "Ptr", lvHwnd, "Int", 0)
-        }
-    } else if !isVisible {
+    if !DllCall("IsWindowVisible", "Ptr", lvHwnd, "Int") {
         DllCall("ShowWindow", "Ptr", lvHwnd, "Int", 8)
         DllCall("RedrawWindow", "Ptr", lvHwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0585)
     }
@@ -9395,53 +10868,90 @@ StartExtraFade(alphaTarget, customFadeMs := -1, previewMonIdx := 0) {
         SyncWakeHooks()
     }
 
-    needsFade := (currentExtraAlpha != targetExtraAlpha)
-    maxFadeMs := 0
+    ; [extra-fade-fix] Every overlay now carries its OWN start alpha, end alpha, duration and start time. The old version shared one
+    ; "is a fade needed" flag, one progress clock and one read-back of the window's alpha between all monitors, so a monitor whose
+    ; overlay was already part-way (the Gentle pre-dim) or just created could be pinned straight to its final alpha with no fade.
+    now := A_TickCount
+    anyFade := false
     for entry in ExtraDimmerGuis {
         if !IsObject(entry) {
             continue
         }
-        curWinAlpha := ""
-        try curWinAlpha := WinGetTransparent(entry.gui.Hwnd)
-        if !IsInteger(curWinAlpha) {
-            curWinAlpha := 0
-        }
-        targetAlphaForMon := (targetExtraAlpha > 0) ? GetEffectiveExtraMonAlpha(entry.monIdx) : 0
-        entry.fadeFromAlpha := Max(0, Min(255, Integer(curWinAlpha)))
-        entry.fadeToAlpha := targetAlphaForMon
+        fromA := ExtraEntryAlpha(entry)
         if (targetExtraAlpha = 0 || (entry.HasProp("removing") && entry.removing)) {
-            entry.fadeToAlpha := 0
+            toA := 0
         } else {
-            entry.fadeToAlpha := (previewMonIdx = entry.monIdx) ? targetExtraAlpha : GetEffectiveExtraMonAlpha(entry.monIdx)
+            toA := (previewMonIdx = entry.monIdx) ? targetExtraAlpha : ExtraMonOverlayAlpha(entry.monIdx)
         }
-        entry.fadeMs := (customFadeMs >= 0) ? customFadeMs : GetExtraMonSetting(entry.monIdx, "FadeMs")
-        if (entry.fadeFromAlpha != entry.fadeToAlpha) {
-            needsFade := true
-            maxFadeMs := Max(maxFadeMs, entry.fadeMs)
+        toA := Max(0, Min(255, Integer(toA)))
+        fadeMs := (customFadeMs >= 0) ? customFadeMs : GetExtraMonSetting(entry.monIdx, "FadeMs")
+        if (customFadeMs < 0 && toA < fromA) {    ; [wake-fast] waking is capped at WAKE_FADE_MS
+            fadeMs := Min(fadeMs, WAKE_FADE_MS)
+        }
+        entry.fadeFromAlpha := fromA
+        entry.fadeToAlpha   := toA
+        entry.fadeMs        := fadeMs
+        entry.fadeStart     := now
+        if (fromA != toA && fadeMs > 0) {
+            anyFade := true
         }
     }
 
-    startBase := currentExtraAlpha
-    if (maxFadeMs <= 0 || !needsFade) {
+    if !anyFade {
         FinishExtraFade()
         return
     }
 
     extraFadeProgress := 0.0
-    extraFadeTimerFn  := StepExtraFade.Bind(startBase, A_TickCount, maxFadeMs)
+    extraFadeTimerFn  := StepExtraFade
     SetTimer(extraFadeTimerFn, 15)
+    StepExtraFade()    ; first step now, so the fade starts on this very tick instead of 15 ms later
 }
 
-StepExtraFade(fadeStartBase := 0, startTick := 0, durationMs := 1) {
-    global currentExtraAlpha, targetExtraAlpha, extraFadeProgress, extraFadeTimerFn
+; The alpha an extra-monitor overlay is showing right now (tracked by this script; falls back to reading the window)
+ExtraEntryAlpha(entry) {
+    if (entry.HasProp("curA") && IsInteger(entry.curA)) {
+        return Max(0, Min(255, Integer(entry.curA)))
+    }
+    curWinAlpha := ""
+    try curWinAlpha := WinGetTransparent(entry.gui.Hwnd)
+    if !IsInteger(curWinAlpha) {
+        curWinAlpha := 0
+    }
+    return Max(0, Min(255, Integer(curWinAlpha)))
+}
 
-    elapsedMs := A_TickCount - startTick
-    extraFadeProgress := Min(1.0, elapsedMs / Max(1, durationMs))
-    eased := extraFadeProgress * extraFadeProgress * (3 - 2 * extraFadeProgress)
-    currentExtraAlpha := Round(fadeStartBase + ((targetExtraAlpha - fadeStartBase) * eased))
-    ApplyExtraDimmerScaledAlphas(elapsedMs, durationMs)
+; Fade progress comes from the clock, per overlay, so each monitor fades over its own Fade Speed
+StepExtraFade() {
+    global currentExtraAlpha, targetExtraAlpha, extraFadeProgress, extraFadeTimerFn, ExtraDimmerGuis
 
-    if (extraFadeProgress >= 1.0) {
+    now := A_TickCount
+    allDone := true
+    maxA := 0
+    minProgress := 1.0
+    for entry in ExtraDimmerGuis {
+        if (!IsObject(entry) || !entry.HasProp("fadeStart")) {
+            continue
+        }
+        dur := entry.fadeMs
+        p := (dur <= 0) ? 1.0 : Max(0.0, Min(1.0, (now - entry.fadeStart) / dur))
+        if (p < 1.0) {
+            allDone := false
+            minProgress := Min(minProgress, p)
+        }
+        eased := p * p * (3 - 2 * p)
+        a := Round(entry.fadeFromAlpha + ((entry.fadeToAlpha - entry.fadeFromAlpha) * eased))
+        a := Max(0, Min(255, a))
+        if (!entry.HasProp("curA") || a != entry.curA) {
+            try WinSetTransparent(a, entry.gui.Hwnd)
+            entry.curA := a
+        }
+        maxA := Max(maxA, a)
+    }
+    extraFadeProgress := minProgress
+    currentExtraAlpha := maxA
+
+    if allDone {
         if IsObject(extraFadeTimerFn) {
             SetTimer(extraFadeTimerFn, 0)
             extraFadeTimerFn := ""
@@ -9459,8 +10969,6 @@ FinishExtraFade() {
         return
     }
     ; Fade finished: pin every overlay to its FINAL alpha.
-    ; (The old call ApplyExtraDimmerScaledAlphas(1, 1) made progress = 1/fadeMs (~0), which snapped
-    ;  the overlay back to its START alpha (0) the instant the fade ended = the dim-then-wake bug.)
     for entry in ExtraDimmerGuis {
         if (!IsObject(entry) || (entry.HasProp("removing") && entry.removing)) {
             continue
@@ -9469,6 +10977,7 @@ FinishExtraFade() {
         finalA := Max(0, Min(255, Integer(finalA)))
         entry.fadeFromAlpha := finalA
         entry.fadeToAlpha   := finalA
+        entry.curA          := finalA
         try WinSetTransparent(finalA, entry.gui.Hwnd)
     }
     keep := []
@@ -9505,9 +11014,9 @@ ApplyExtraDimmerScaledAlphas(elapsedMs, fallbackDurationMs := 1) {
 
 ; Failsafe: nothing wants a secondary dimmed for 3 s but overlays are still up -> remove them
 ExtraOverlayFailsafe(now) {
-    global isAutoExtraDimmed, isManualExtraDimOn, manualExtraMonSet, isTestingExtraDim, ExtraDimmerGuis, currentExtraAlpha
+    global isAutoExtraDimmed, isManualExtraDimOn, manualExtraMonSet, isTestingExtraDim, ExtraDimmerGuis, currentExtraAlpha, extraMonPreDimSet
     static since := 0
-    if (isAutoExtraDimmed || isManualExtraDimOn || manualExtraMonSet.Count > 0 || isTestingExtraDim
+    if (isAutoExtraDimmed || isManualExtraDimOn || manualExtraMonSet.Count > 0 || isTestingExtraDim || extraMonPreDimSet.Count > 0
         || (ExtraDimmerGuis.Length = 0 && currentExtraAlpha = 0)) {
         since := 0
         return
@@ -9524,7 +11033,7 @@ ExtraOverlayFailsafe(now) {
 }
 
 EnsureExtraDimmerGuis(previewMonIdx := 0) {
-    global ExtraDimmerGuis, manualExtraMonSet, extraMonDimmedSet, isManualExtraDimOn, isAutoExtraDimmed
+    global ExtraDimmerGuis, manualExtraMonSet, extraMonDimmedSet, isManualExtraDimOn, isAutoExtraDimmed, extraMonPreDimSet
 
     desired := Map()
     monCount := GetDetectedMonitorCount()
@@ -9539,6 +11048,7 @@ EnsureExtraDimmerGuis(previewMonIdx := 0) {
             || isManualExtraDimOn
             || (manualExtraMonSet.Count > 0 && manualExtraMonSet.Has(mIdx))
             || (manualExtraMonSet.Count = 0 && isAutoExtraDimmed && extraMonDimmedSet.Has(mIdx))
+            || (manualExtraMonSet.Count = 0 && extraMonPreDimSet.Has(mIdx))
         if includeMon {
             desired[mIdx] := true
         }
@@ -9567,11 +11077,12 @@ EnsureExtraDimmerGuis(previewMonIdx := 0) {
             continue
         }
         MonitorGet(mIdx, &mLeft, &mTop, &mRight, &mBottom)
-        g := Gui("-Caption +AlwaysOnTop +ToolWindow -DPIScale +E0x20 +E0x80000")
+                ; Click-only wake: the overlay absorbs the mouse (no hover effects / tooltips / resize cursors from the windows under it) and never takes focus
+        g := Gui("-Caption +AlwaysOnTop +ToolWindow -DPIScale +E0x80000 +E0x08000000" (GetWakeMode(mIdx) = 2 ? "" : " +E0x20"))
         g.BackColor := "000000"
         WinSetTransparent(0, g.Hwnd)
         g.Show("x" mLeft " y" mTop " w" (mRight - mLeft) " h" (mBottom - mTop) " NA")
-        ExtraDimmerGuis.Push({ monIdx: mIdx, gui: g, removing: false })
+        ExtraDimmerGuis.Push({ monIdx: mIdx, gui: g, removing: false, curA: 0 })
     }
 }
 
@@ -9601,37 +11112,135 @@ SetCursorIdleHidden(hidden) {
     UpdateCursorVisibility()
 }
 
+; Click-only wake: remembers until when the pointer stays visible on a dimmed Monitor 1 (2 s after the last movement)
+CursorRevealTick(extend := false) {
+    static revealUntil := 0
+    if extend {
+        revealUntil := A_TickCount + 2000
+    }
+    return revealUntil
+}
+
+; Hides classic Windows tooltip windows (posted, never blocks on the other program)
+HideTooltipWindows() {
+    try {
+        for hwnd in WinGetList("ahk_class tooltips_class32") {
+            DllCall("ShowWindowAsync", "Ptr", hwnd, "Int", 0)
+        }
+    }
+}
+
 UpdateCursorVisibility() {
-    global isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed, isTestingPrimaryDim, isCursorIdleHidden, areCursorsHidden
+    global isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed, isTestingPrimaryDim, isCursorIdleHidden, areCursorsHidden, lastDisplayChangeTick
+    global isManualExtraDimOn, isAutoExtraDimmed, manualExtraMonSet, extraMonDimmedSet
     static busy := false
+    static rcL := 0, rcT := 0, rcR := 0, rcB := 0, priIdx := 1, rcTick := 0, rcStamp := -1
+    static arrowApplied := false, arrowMarkH := 0, tipTick := 0
     if busy {
         return    ; [hide-fix-4] another timer interrupted a half-finished hide / restore: let the first call finish
     }
     busy := true
     try {
+        shouldHide := isCursorIdleHidden
+        arrowOnly := false
         primaryDimActive := isManualBlackoutOn || isManualPrimaryDimOn || isAutoPrimaryDimmed || isTestingPrimaryDim
-        cursorOnPrimary := false
-
-        if primaryDimActive {
+        extraDimActive := isManualExtraDimOn || isAutoExtraDimmed || manualExtraMonSet.Count > 0
+        if (primaryDimActive || extraDimActive) {
+            now := A_TickCount
+            ; Monitor 1 geometry is cached (refreshed every 2 s and after any display change)
+            if (rcStamp != lastDisplayChangeTick || (now - rcTick) > 2000) {
+                rcStamp := lastDisplayChangeTick
+                rcTick := now
+                try {
+                    priIdx := MonitorGetPrimary()
+                    MonitorGet(priIdx, &rcL, &rcT, &rcR, &rcB)
+                }
+            }
             pt := Buffer(8, 0)
             if DllCall("GetCursorPos", "Ptr", pt.Ptr) {
-                cursorOnPrimary := IsPointOnPrimaryMonitor(NumGet(pt, 0, "Int"), NumGet(pt, 4, "Int"))
+                x := NumGet(pt, 0, "Int")
+                y := NumGet(pt, 4, "Int")
+                            onDimmed := false
+                onPrimaryScreen := false
+                clickMode := false
+                gameRun := IsCompGameRunning()
+                if (x >= rcL && x < rcR && y >= rcT && y < rcB) {
+                    if (primaryDimActive && (!gameRun || isManualBlackoutOn || isManualPrimaryDimOn || isTestingPrimaryDim || IsCompGameOnMonitor(priIdx))) {
+                        onDimmed := true
+                        onPrimaryScreen := true
+                        clickMode := (GetWakeMode(priIdx) = 2)
+                    }
+                } else if extraDimActive {
+                    mon := GetExtraMonitorAtPoint(x, y)
+                                       if (mon >= 2 && (isManualExtraDimOn || manualExtraMonSet.Has(mon) || (isAutoExtraDimmed && extraMonDimmedSet.Has(mon)))
+                        && (!gameRun || isManualExtraDimOn || manualExtraMonSet.Has(mon) || IsCompGameOnMonitor(mon))) {
+                        onDimmed := true
+                        clickMode := (GetWakeMode(mon) = 2)
+                    }
+                }
+                if onDimmed {
+                    ; Tooltips of the windows under the overlay must not show on top of it
+                    if ((now - tipTick) >= 80) {
+                        tipTick := now
+                        HideTooltipWindows()
+                    }
+                    if clickMode {
+                        ; Click-only wake: a plain arrow is visible while moving and for 2 s after the last movement, then hidden
+                        if (now <= CursorRevealTick()) {
+                            shouldHide := false
+                            arrowOnly := true
+                        } else {
+                            shouldHide := true
+                        }
+                    } else if onPrimaryScreen {
+                        shouldHide := true
+                    }
+                }
             }
         }
 
-        shouldHide := (primaryDimActive && cursorOnPrimary) || isCursorIdleHidden
-        if (shouldHide && !areCursorsHidden) {
-            HideSystemCursors()
-        } else if (!shouldHide && areCursorsHidden) {
-            RestoreSystemCursors()
+        if shouldHide {
+            if !areCursorsHidden {
+                HideSystemCursors()
+            }
+            arrowApplied := false
+        } else if arrowOnly {
+            if areCursorsHidden {
+                RestoreSystemCursors()
+                arrowApplied := false
+            }
+            ; Every pointer shape becomes the normal arrow (no resize / hand / text cursors over the black screen)
+            if (!arrowApplied || DllCall("LoadCursor", "Ptr", 0, "Ptr", 32513, "Ptr") != arrowMarkH) {
+                arrow := DllCall("LoadCursor", "Ptr", 0, "Ptr", 32512, "Ptr")
+                if arrow {
+                    for id in BlankCursorIds() {
+                        if (id = 32512) {
+                            continue
+                        }
+                        hCopy := DllCall("CopyImage", "Ptr", arrow, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
+                        if (hCopy && !DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", id, "Int")) {
+                            DllCall("DestroyCursor", "Ptr", hCopy)
+                        }
+                    }
+                    arrowMarkH := DllCall("LoadCursor", "Ptr", 0, "Ptr", 32513, "Ptr")
+                    arrowApplied := true
+                }
+            }
+        } else {
+            if areCursorsHidden {
+                RestoreSystemCursors()
+                arrowApplied := false
+            } else if arrowApplied {
+                arrowApplied := false
+                if (DllCall("LoadCursor", "Ptr", 0, "Ptr", 32513, "Ptr") = arrowMarkH) {
+                    RestoreSystemCursors()    ; give the normal cursors back
+                }
+            }
         }
     } finally {
         busy := false
     }
-}
-
-; One list for hide + guard, so they always agree. 32652 / 32653 (pin / person) added.
-BlankCursorIds() {
+}BlankCursorIds() {
     static ids := [32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32650, 32651, 32652, 32653]
     return ids
 }
@@ -9744,6 +11353,9 @@ IsSystemCursorBlank(id) {
 ; While the cursor should be hidden this checks (cheaply) that the blank ones are still in place and re-applies them ONLY if they are not,
 ; so there is no constant re-applying that could itself flicker.
 CursorHideGuard() {
+    if IsScriptWindowDrag() {    ; [smooth-2]
+        return
+    }
         global areCursorsHidden, blankCursorHandles, eyedropperCursorActive, cursorGuardReapplyCount
     global isCursorIdleHidden, isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed, isTestingPrimaryDim
     static recent := []
@@ -9939,6 +11551,7 @@ CleanupOnExit(exitReason, exitCode) {
     }
     DebugLogEvent("OLED Engine stopped (" exitReason ")")
     RestoreWindowsTaskbarAutoHideOnExit()
+    TaskbarDimming.Shutdown()
     UnregisterSessionLockHook()
     UnregisterAllMonitorHotkeys()
     SaveOledCareState()
@@ -10027,6 +11640,9 @@ RestoreWindowsTaskbarAutoHideOnExit() {
 }
 
 CheckLongIdle() {
+    if IsScriptWindowDrag() {    ; [smooth-2]
+        return
+    }
     global LongIdle_Off_Enabled, LongIdle_Off_Min, isSessionLocked, isAutomationPaused, lastCursorInputTick
     static sent := false
     if (!LongIdle_Off_Enabled || isSessionLocked || isAutomationPaused) {
@@ -10041,7 +11657,7 @@ CheckLongIdle() {
     if sent {
         return
     }
-    if (IsExcludedProcessRunning() || IsCompGameRunning() || GetMoviePlayingMonitorsCached().Count > 0) {
+   if (PresetNeverDimActive() || IsExcludedProcessRunning() || IsCompGameRunning() || GetMoviePlayingMonitorsCached().Count > 0) {
         return
     }
     sent := true
@@ -10159,6 +11775,9 @@ LongIdleTurnOff(list := "") {
 
 ; Runs only while a monitor is switched off: the first input after that moment switches everything back on
 LongIdleWakeWatch() {
+    if IsScriptWindowDrag() {    ; [smooth-2]
+        return
+    }
     global longIdleDdcOff, longIdleOffTick
     if (longIdleDdcOff.Count = 0) {
         SetTimer(LongIdleWakeWatch, 0)
@@ -11583,16 +13202,49 @@ BuildPresetsTab(g, dark, tabIdx := 0) {
 }
 
 ; ==============================================================================
-; 15. DEV WORKFLOW HOTKEYS
+; 15/16. UTILITY HOTKEYS (Restore Cursor / Diagnostic Report / Reload Script)
+;   Defaults use LEFT Ctrl + LEFT Alt so Right Alt / AltGr (Polish ć, ą, ę...) still types normally.
+;   Custom shortcuts are set in Settings > Hotkeys. Empty = default.
 ; ==============================================================================
-Hotkey("^!r", (*) => (DebugLogEvent("Dev reload hotkey triggered (Ctrl+Alt+R)"), Reload()))
+RegisteredUtilityHotkeys := []
 
-; ==============================================================================
-; 16. HIDE DIAGNOSTICS (Ctrl+Alt+H) - shows exactly why the cursor / desktop icons are or are not hiding, and copies it to the clipboard
-; ==============================================================================
-Hotkey("^!h", (*) => ShowHideDiagnostics())
-Hotkey("^!c", (*) => (SetCursorIdleHidden(false), RestoreSystemCursors()))   ; Ctrl+Alt+C = emergency cursor restore
+NormalizeUtilityHotkey(hk) {
+    ; The Hotkey control cannot record left/right keys. Force Ctrl+Alt combos to the LEFT keys so AltGr never triggers them.
+    if (InStr(hk, "^") && InStr(hk, "!")) {
+        hk := StrReplace(StrReplace(hk, "^", "<^"), "!", "<!")
+    }
+    return hk
+}
 
+RegisterUtilityHotkeys() {
+    global RegisteredUtilityHotkeys
+    for item in RegisteredUtilityHotkeys {
+        try Hotkey(item.hk, item.fn, "Off")
+    }
+    RegisteredUtilityHotkeys := []
+    list := [
+        { key: "CursorRestore", def: "<^<!c", fn: (*) => (SetCursorIdleHidden(false), RestoreSystemCursors()) },
+        { key: "Diagnostics",   def: "<^<!h", fn: (*) => ShowHideDiagnostics() },
+        { key: "DevReload",     def: "<^<!r", fn: (*) => (DebugLogEvent("Dev reload hotkey triggered"), Reload()) }
+    ]
+    for item in list {
+        hk := NormalizeUtilityHotkey(Trim(GetUtilityHotkeyVar(item.key)))
+        if (hk = "") {
+            hk := item.def
+        }
+        ok := false
+        try {
+            Hotkey(hk, item.fn, "On")
+            ok := true
+        }
+        if (!ok) {
+            hk := item.def
+            try Hotkey(hk, item.fn, "On")
+        }
+        RegisteredUtilityHotkeys.Push({ hk: hk, fn: item.fn })
+    }
+}
+RegisterUtilityHotkeys()
 ShowHideDiagnostics() {
     global Desktop_Hide_Enabled, isAutomationPaused, isManualBlackoutOn, isManualPrimaryDimOn, isAutoPrimaryDimmed
     global isCursorIdleHidden, areCursorsHidden, areDesktopIconsHidden, lastCursorMoveTick, lastDesktopIconActiveTick
@@ -11694,14 +13346,32 @@ BrowserChromeIsMainWindow(hwnd) {
     return (w >= 400 && h >= 250)
 }
 
-; Adds overlays for new browser windows and removes those of closed / minimized ones
+; True when dimming is turned on for this monitor (0 = unknown monitor, treated as on)
+BrowserMonitorDimEnabled(monIdx) {
+    global Primary_Auto_Enabled
+    if !ZoneDimming.MonitorAwareEnabled {
+        return true
+    }
+    if (monIdx <= 0) {
+        return true
+    }
+    if (monIdx = MonitorGetPrimary()) {
+        return !!Primary_Auto_Enabled
+    }
+    return !!GetExtraMonSetting(monIdx, "Auto")
+}
+; Adds overlays for new browser windows and removes those of closed / minimized ones.
+; Browsers on a monitor with dimming turned off get no overlay.
 BrowserChromeScan() {
-    global BrowserOverlays
+    global BrowserOverlays, BrowserPreviewUntil
     found := Map()
+    preview := (A_TickCount < BrowserPreviewUntil)     ; the Browser tab preview shows on every monitor
     for hwnd in WinGetList() {
         try {
             if BrowserChromeIsMainWindow(hwnd) {
-                found[hwnd] := true
+                if (preview || BrowserMonitorDimEnabled(GetWindowMonitorIndex(hwnd))) {
+                    found[hwnd] := true
+                }
             }
         }
     }
@@ -11799,13 +13469,24 @@ BrowserChromeRect(e) {
         R := Min(R, NumGet(monInfo, 28, "Int"))
         B := Min(B, NumGet(monInfo, 32, "Int"))
     }
-    dpi := DllCall("GetDpiForWindow", "Ptr", hwnd, "UInt")
+  dpi := DllCall("GetDpiForWindow", "Ptr", hwnd, "UInt")
     scale := (dpi ? dpi : 96) / 96
 
-    ; Chromium browsers: measure where the web page starts
-       off := -1
+    off := -1
+    if ZoneDimming.PerBrowserHeightEnabled {
+        procName := ""
+        try procName := WinGetProcessName(hwnd)
+        customH := ZoneDimming.ResolveToolbarHeight(procName, -1)
+        if (customH > 0) {
+            off := Round(customH * scale)
+        }
+    }
+
+    ; Chromium browsers: measure where the web page starts (unless overridden per-browser above)
     sizeKey := (R - L) "x" (B - T)
-    if (e.off >= 0 && e.sizeKey = sizeKey && (A_TickCount - e.measTick) < 750) {
+    if (off >= 0) {
+        ; resolved by per-browser height override
+    } else if (e.off >= 0 && e.sizeKey = sizeKey && (A_TickCount - e.measTick) < 750) {
         off := e.off        ; measured a moment ago and the window size is the same - skip the child-window scan
     } else if (InStr(BrowserChromeClass(hwnd), "Chrome_WidgetWin") = 1) {
         e.sizeKey := sizeKey
@@ -12060,10 +13741,11 @@ BrowserChromeTick() {
             videoMons := GetMoviePlayingMonitorsCached()
         }
     }
+    dragging := IsWindowDragActive()    ; [smooth-1]
     Critical "On"
     oldCtx := 0
     try {
-        if (now - BrowserScanTick >= 500) {
+        if (!dragging && now - BrowserScanTick >= 500) {
             BrowserScanTick := now
             BrowserChromeScan()
         }
@@ -12089,6 +13771,14 @@ BrowserChromeTick() {
 
        for hwnd, e in BrowserOverlays {
             try {
+                if (dragging && fgOwner = hwnd) {
+                    ; [smooth-1] this browser is being moved / resized: drop its overlay at once and skip the UI Automation + popup scans
+                    e.typing := false
+                    e.alpha := 0
+                    e.last := now
+                    BrowserChromePlace(e)
+                    continue
+                }
                 if blocked {
                     e.typing := false
                     if (e.alpha > 0) {
@@ -12097,9 +13787,11 @@ BrowserChromeTick() {
                     }
                     continue
                 }
-                if !BrowserChromeRect(e) {
+                                if !BrowserChromeRect(e) {
                     e.alpha := 0
-                    e.last := now
+                    if (fgOwner = hwnd) {
+                        e.last := now        ; only the focused window gets a fresh delay when it comes back
+                    }
                     e.typing := false
                     BrowserChromePlace(e)
                     continue
@@ -12175,9 +13867,12 @@ BrowserNum(txt, fallback, lo, hi) {
 FormatBrowserFade(ms) {
     return ms " ms"
 }
-BuildBrowserTab(g, dark) {
+BuildBrowserTab(g, dark, tabIdx := 4, tabs := "") {
     global Browser_Dim_Enabled, Browser_Dim_Percent, Browser_Dim_Delay_Sec, Browser_Dim_VideoOnly, Browser_Dim_FallbackH, Browser_Dim_Fade_Ms
-    global BrowserUi, SettingsLayout
+    global BrowserUi, SettingsLayout, SettingsTabsCtrl
+    if !IsObject(tabs) {
+        tabs := SettingsTabsCtrl
+    }
     if !IsSet(Browser_Dim_Fade_Ms) {
         Browser_Dim_Fade_Ms := 350
     }
@@ -12217,19 +13912,17 @@ BuildBrowserTab(g, dark) {
     }
     StyleControlTheme(txtStat, dark, true)
 
-    boxHelp := AddSectionBox(g, lay.bx, 350, lay.bw, 100, "How It Works", dark)
-    helpY := 374
-    for line in ["• Only the strip above the web page is covered (tabs, address bar, toolbar, bookmarks bar)."
-        , "• Hover the strip, open any toolbar menu/dropdown, or press Ctrl+L / T / K / E / N / F / W / Tab, Alt+D or F6."
-        , "• The overlay is hidden in fullscreen. Windows covering the browser stay on top of it."
-        , "• Fallback height is used for Firefox-based browsers, or when the page can't be measured."
-        , "• Missing a browser? Add its .exe name to the Browsers box on the General tab."] {
+boxHelp := AddSectionBox(g, lay.bx, 346, lay.bw, 62, "How It Works", dark)
+    helpY := 366
+    for line in ["• Covers only tabs, address bar, and bookmarks; wakes on hover, menus, or address-bar shortcuts."
+        , "• Hidden in fullscreen. Fallback height applies to Firefox; add missing .exe names on General."] {
         t := g.AddText("x" lay.ix " y" helpY " w" lay.iw " +0x100", line)
         StyleControlTheme(t, dark, true)
         t.GetPos(, , , &lineH)
-        helpY += lineH + 6
+        helpY += lineH + 3
     }
-    boxHelp.Move(, , , helpY - 350 + 8)
+    boxHelp.Move(, , , helpY - 346 + 4)
+    ZoneDimming.BuildBrowserTabUI(g, tabs, tabIdx, lay.bx, helpY + 10, lay.bw)
 
     RegisterTip(chkOn, "Master switch for the browser toolbar dimmer. Click Apply or Save & Close to use your changes.")
     RegisterTip(edtDelay, "Seconds the toolbar must be unused before it dims.")
@@ -12247,24 +13940,26 @@ BuildBrowserTab(g, dark) {
         SetControlsEnabled(autoCtrls, !!chkOn.Value)
         MarkSettingsDirty()
     }
+    ; Redraw without erasing the background (Redraw() erases with the default light brush = the faint box while dragging)
+    BrRedraw(c) => DllCall("RedrawWindow", "Ptr", c.Hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0101)
     OnBrSlider(*) {
         txtPct.Text := sld.Value "%"
         chkBlk.Value := (sld.Value = 100) ? 1 : 0
         if (sld.Value < 100) {
             st["prev"] := sld.Value
         }
-        sld.Redraw()
+        BrRedraw(sld)
         MarkSettingsDirty()
     }
     OnBrFade(*) {
         txtFade.Text := FormatBrowserFade(sldFade.Value)
-        sldFade.Redraw()
+        BrRedraw(sldFade)
         MarkSettingsDirty()
     }
     OnBrBlack(*) {
         sld.Value := chkBlk.Value ? 100 : st["prev"]
         txtPct.Text := sld.Value "%"
-        sld.Redraw()
+        BrRedraw(sld)
         MarkSettingsDirty()
     }
     OnBrReset(*) {
@@ -12276,8 +13971,8 @@ BuildBrowserTab(g, dark) {
         chkBlk.Value := 1
         sldFade.Value := 350
         txtFade.Text := FormatBrowserFade(350)
-        sld.Redraw()
-        sldFade.Redraw()
+        BrRedraw(sld)
+        BrRedraw(sldFade)
         MarkSettingsDirty()
     }
     ReportTest() {

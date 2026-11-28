@@ -1,17 +1,15 @@
 # OLED Engine
 
-Multi-monitor OLED burn-in protection for Windows: per-category idle dimming and #000000 blackout, smart browser toolbar dimming, HDR/SDR profile switching, pixel refresh tracking, and game automation.
+Multi-monitor OLED burn-in protection for Windows: per-category idle dimming and #000000 blackout, HDR/SDR profile switching, pixel refresh tracking, and game automation.
 
 ## Download
 
-Get the latest version from the **[Releases page](../../releases/latest)** and download `OLED-Engine.exe`.
-
-Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+Get the latest version from the **[Releases page](../../releases/latest)**. Download `OLED-Engine.zip`.
 
 ## Install
 
-1. Create a dedicated folder somewhere you own, such as `Documents\OLED-Engine` or `C:\Tools\OLED-Engine`. Don't use `C:\Program Files`.
-2. Move `OLED-Engine.exe` into that folder.
+1. Right-click the zip and choose **Extract All** (don't run it from inside the zip).
+2. Put the extracted `OLED-Engine` folder somewhere you own, such as `Documents` or `C:\Tools`. Don't use `C:\Program Files`.
 3. Run `OLED-Engine.exe`.
 
 OLED Engine is portable. On first run it creates `config`, `logs` and `backups` folders next to the exe. Your settings live in `config`. To move the app, move the whole folder.
@@ -32,7 +30,7 @@ Set the paths on the Automation tab.
 
 ## Notes
 
-- Official releases are code-signed via the SignPath Foundation. Each release also lists a SHA256 hash you can verify with `Get-FileHash .\OLED-Engine.exe` in PowerShell.
+- Windows may show a SmartScreen or antivirus warning for new unsigned apps. Each release lists a SHA256 hash you can check with `Get-FileHash .\OLED-Engine.exe` in PowerShell.
 - Found a bug or have an idea? Open an [issue](../../issues).
 
 ## Building from source

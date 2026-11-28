@@ -1430,9 +1430,12 @@ OnDelayChanged(ctrl, *) {
 LoadAutomationConfig() {
     global AutoCfg, AutoIniPath, LastAppliedGsyncState
 
-    AutoCfg["Enabled"]      := 0
-    AutoCfg["GsyncEnabled"] := 0
-    AutoCfg["ExitDelaySec"] := Integer(IniRead(AutoIniPath, "General", "ExitDelaySec", "6"))
+    ; [persist-fix] These used to be forced to 0 / empty on every start, so "Enable Game Automation", "Enable G-Sync Automation",
+    ; the trigger games and the per-game app lists all reset after every reload. They are now read back from the ini.
+    AutoCfg["Enabled"]      := (IniRead(AutoIniPath, "General", "Enabled", "0") = "1") ? 1 : 0
+    AutoCfg["GsyncEnabled"] := (IniRead(AutoIniPath, "General", "GsyncEnabled", "0") = "1") ? 1 : 0
+    exitDelay := IniRead(AutoIniPath, "General", "ExitDelaySec", "6")
+    AutoCfg["ExitDelaySec"] := IsInteger(exitDelay) ? Max(0, Integer(exitDelay)) : 6
     AutoCfg["NpiExe"]       := IniRead(AutoIniPath, "Paths", "NpiExe", "")
     AutoCfg["NipOff"]       := IniRead(AutoIniPath, "Paths", "NipOff", "")
     AutoCfg["NipOn"]        := IniRead(AutoIniPath, "Paths", "NipOn", "")
@@ -1443,6 +1446,21 @@ LoadAutomationConfig() {
 
     AutoCfg["TriggerGames"] := []
     AutoCfg["PerGameApps"] := Map()
+    for gameExe in StrSplit(IniRead(AutoIniPath, "Lists", "TriggerGames", ""), "|") {
+        gameExe := Trim(gameExe)
+        if (gameExe = "") {
+            continue
+        }
+        AutoCfg["TriggerGames"].Push(gameExe)
+        apps := []
+        for appItem in StrSplit(IniRead(AutoIniPath, "GameApps", StrLower(gameExe), ""), "|") {
+            appItem := Trim(appItem)
+            if (appItem != "") {
+                apps.Push(appItem)
+            }
+        }
+        AutoCfg["PerGameApps"][StrLower(gameExe)] := apps
+    }
 }
 
 SaveAutomationConfig() {
